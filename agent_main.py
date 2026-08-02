@@ -15,6 +15,8 @@ import os
 import sys
 from typing import Any
 
+import cv2
+
 # Import file modules and the security controller
 from agent_security import SecurityController, verify_gateway_token, validate_gateway_url
 from client_agent import show_notification
