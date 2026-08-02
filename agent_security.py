@@ -1,4 +1,4 @@
-﻿"""Consent, authentication, validation, and audit controls for a Windows Agent.
+"""Consent, authentication, validation, and audit controls for a Windows Agent.
 Set ``WINDOWS_AGENT_GATEWAY_TOKEN`` to a random 32+ byte secret before starting
 the agent. The gateway must verify the same value in the ``X-Agent-Token``
 WebSocket handshake header using ``verify_gateway_token``.
@@ -21,7 +21,15 @@ from urllib.parse import urlparse
 from websockets.asyncio.client import ClientConnection, connect
 
 
-APP_DIRECTORY = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WindowsAgent"
+if os.name == "nt":
+    # Windows: dùng %LOCALAPPDATA%\WindowsAgent (ví dụ: C:\Users\user\AppData\Local\WindowsAgent)
+    APP_DIRECTORY = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "WindowsAgent"
+else:
+    # macOS/Linux (môi trường dev): lưu trong thư mục project hoặc theo biến môi trường
+    _agent_data_dir = os.environ.get("AGENT_DATA_DIR", "")
+    APP_DIRECTORY = Path(_agent_data_dir) if _agent_data_dir else Path(__file__).parent / ".agent_data"
+
+
 CONSENT_FILE = APP_DIRECTORY / "authorization.json"
 AUDIT_LOG = APP_DIRECTORY / "agent_audit.log"
 TOKEN_HEADER = "X-Agent-Token"
@@ -109,7 +117,8 @@ class SecurityController:
         self._allowed_applications = {
             name: Path(path).resolve() for name, path in (allowed_applications or {}).items()
         }
-        if any(not name or not path.is_file() for name, path in self._allowed_applications.items()):
+        # Only validate executable paths on Windows – dev machines (macOS/Linux) skip this check
+        if os.name == "nt" and any(not name or not path.is_file() for name, path in self._allowed_applications.items()):
             raise ValueError("Each allowed application needs a non-empty name and existing executable path")
         _prepare_storage()
 

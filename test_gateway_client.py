@@ -1,7 +1,4 @@
 """Test client đơn giản để kiểm tra Gateway từ dòng lệnh.
-
-Dùng để test phần Gateway của Role 2 mà không cần Frontend.
-
 Chạy: python test_gateway_client.py
 
 Đảm bảo gateway_server.py đang chạy trước.

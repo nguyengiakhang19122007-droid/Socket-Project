@@ -1,4 +1,4 @@
-﻿"""Windows Agent Main Orchestrator.
+"""Windows Agent Main Orchestrator.
 This script binds all 7 modules, the security controller, and the local WebSocket
 gateway client loop together. It listens for remote commands, triggers local
 Windows consent dialogs, executes the requested actions safely, and returns
@@ -33,12 +33,20 @@ AGENT_TOKEN = os.getenv("WINDOWS_AGENT_GATEWAY_TOKEN", "0123456789abcdef01234567
 class AgentOrchestrator:
     """Quản lý trạng thái và điều phối thực thi các module của Agent."""
 
-    def __init__(self) -> None:
-        self.security = SecurityController(allowed_applications={
-            "notepad": r"C:\Windows\System32\notepad.exe",
-            "calc": r"C:\Windows\System32\calc.exe"
-        })
+    def __init__(self, allowed_applications: dict[str, str] | None = None) -> None:
+        # Nếu không truyền vào, dùng default Windows paths (chỉ hoạt động trên Windows)
+        if allowed_applications is None:
+            import os as _os
+            if _os.name == "nt":
+                allowed_applications = {
+                    "notepad": r"C:\Windows\System32\notepad.exe",
+                    "calc": r"C:\Windows\System32\calc.exe",
+                }
+            else:
+                allowed_applications = {}
+        self.security = SecurityController(allowed_applications=allowed_applications)
         self.keylogger = RemoteKeylogger()
+
         
     async def dispatch_command(self, raw_message: str | dict[str, Any]) -> dict[str, Any]:
         """Tiếp nhận thông điệp từ Gateway/Web App, xác thực và điều phối module."""

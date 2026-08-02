@@ -14,8 +14,8 @@ Cấu hình qua biến môi trường:
   GATEWAY_HOST         Địa chỉ bind (mặc định: 0.0.0.0 – toàn bộ LAN)
   GATEWAY_PORT         Cổng lắng nghe (mặc định: 8765)
   GATEWAY_TOKEN        Token bí mật dùng để xác thực Web App
-  SCREEN_FPS           Số frame/giây cho livestream màn hình (mặc định: 5)
-  WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 10)
+  SCREEN_FPS           Số frame/giây cho livestream màn hình (mặc định: 60)
+  WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 60)
   LOG_LEVEL            Mức log: DEBUG / INFO / WARNING (mặc định: INFO)
 """
 
@@ -51,10 +51,40 @@ DEFAULT_TOKEN = os.getenv(
     "GATEWAY_TOKEN",
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 )
-SCREEN_FPS = float(os.getenv("SCREEN_FPS", "5"))
-WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "10"))
+SCREEN_FPS = float(os.getenv("SCREEN_FPS", "60"))
+WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "60"))
 
 logger = logging.getLogger("gateway")
+
+# Ứng dụng được phép khởi chạy từ xa.
+# Đặt biến môi trường GATEWAY_ALLOWED_APPS với JSON object, ví dụ:
+#   GATEWAY_ALLOWED_APPS='{"notepad": "C:\\Windows\\System32\\notepad.exe"}'
+# Nếu không đặt, mặc định dùng notepad và calc (chỉ hoạt động trên Windows).
+_DEFAULT_ALLOWED_APPS_WINDOWS = {
+    "notepad": r"C:\Windows\System32\notepad.exe",
+    "calc": r"C:\Windows\System32\calc.exe",
+}
+
+
+def _load_allowed_applications() -> dict[str, str]:
+    """Đọc allowed_applications từ biến môi trường GATEWAY_ALLOWED_APPS (JSON).
+    Nếu không có, dùng giá trị mặc định cho Windows.
+    Trên macOS/Linux (môi trường dev), trả về dict rỗng để tránh lỗi validate path.
+    """
+    raw = os.getenv("GATEWAY_ALLOWED_APPS", "")
+    if raw:
+        try:
+            apps = json.loads(raw)
+            if isinstance(apps, dict):
+                return {str(k): str(v) for k, v in apps.items()}
+        except json.JSONDecodeError:
+            logger.warning("GATEWAY_ALLOWED_APPS is not valid JSON, using defaults.")
+    # Trên Windows dùng default; trên macOS/Linux bỏ qua để không crash khi dev
+    if os.name == "nt":
+        return _DEFAULT_ALLOWED_APPS_WINDOWS
+    return {}
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Trạng thái toàn cục của Gateway
@@ -463,10 +493,12 @@ async def _handle_command(
 
 async def run_gateway(host: str, port: int, token: str) -> None:
     """Khởi động WebSocket Gateway Server."""
-    orchestrator = AgentOrchestrator()
+    allowed_apps = _load_allowed_applications()
+    logger.info("Allowed applications: %s", list(allowed_apps.keys()) or "(none)")
+    orchestrator = AgentOrchestrator(allowed_applications=allowed_apps)
 
-    # Kiểm tra consent ban đầu (chạy một lần, lưu vào file)
-    if not orchestrator.security.ensure_initial_consent():
+    # Kiểm tra consent ban đầu (chỉ hiển thị dialog trên Windows)
+    if os.name == "nt" and not orchestrator.security.ensure_initial_consent():
         logger.error("Initial consent denied by user. Gateway will not start.")
         return
 
