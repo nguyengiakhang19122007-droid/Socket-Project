@@ -1,6 +1,4 @@
-"""Windows system metrics and power-control helpers.
-Power-changing operations require ``confirm=True`` so callers must explicitly
-opt in before invoking a disruptive system command. """
+﻿"""Windows system metrics and power-control helpers."""
 
 from __future__ import annotations
 
@@ -11,6 +9,8 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import timedelta
 
+import psutil
+
 
 class WindowsSystemError(RuntimeError):
     """Raised when a Windows API or system command cannot be completed."""
@@ -18,8 +18,10 @@ class WindowsSystemError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class SystemMetrics:
-    """Current machine memory use and elapsed time since the last boot."""
+    """Current machine status including System Uptime (elapsed usage time), CPU temp, and RAM %."""
 
+    uptime_str: str  # Thời gian máy tính đã sử dụng/hoạt động
+    cpu_temperature: float | str
     ram_usage_percent: float
     uptime: timedelta
 
@@ -39,7 +41,6 @@ class _MemoryStatusEx(ctypes.Structure):
 
 
 def _require_windows() -> None:
-    """Fail clearly rather than issuing platform-specific calls elsewhere."""
     if os.name != "nt":
         raise OSError("windows_system_control can only run on Windows")
 
@@ -49,8 +50,43 @@ def _require_confirmation(confirm: bool) -> None:
         raise PermissionError("Power operation cancelled: call with confirm=True to proceed")
 
 
+def _get_cpu_temperature() -> float | str:
+    """Lấy nhiệt độ CPU trên Windows qua WMI / Sensor."""
+    try:
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for name, entries in temps.items():
+                    if entries:
+                        return round(entries[0].current, 1)
+        
+        # Fallback qua PowerShell WMI
+        cmd = "powershell -NoProfile -Command \"(Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue).CurrentTemperature\""
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=2, shell=True)
+        if res.returncode == 0 and res.stdout.strip().isdigit():
+            val = float(res.stdout.strip())
+            celsius = (val / 10.0) - 273.15
+            if 0 <= celsius <= 120:
+                return round(celsius, 1)
+    except Exception:
+        pass
+    return "N/A"
+
+
+def _format_uptime(td: timedelta) -> str:
+    """Định dạng timedelta thành chuỗi thời gian sử dụng dễ đọc (ví dụ: '1 ngày, 04:15:20' hoặc '04:15:20')."""
+    total_seconds = int(td.total_seconds())
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    if days > 0:
+        return f"{days} ngày, {hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def get_system_metrics() -> SystemMetrics:
-    """Return current physical RAM usage percentage and Windows system uptime."""
+    """Trả về chỉ số hệ thống: Thời gian máy đã sử dụng (Uptime), Nhiệt độ CPU, % RAM."""
     _require_windows()
     memory_status = _MemoryStatusEx()
     memory_status.dwLength = ctypes.sizeof(memory_status)
@@ -59,15 +95,21 @@ def get_system_metrics() -> SystemMetrics:
     if not kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status)):
         raise WindowsSystemError(f"GlobalMemoryStatusEx failed (WinError {ctypes.get_last_error()})")
 
+    # Lấy số millisecond máy đã hoạt động kể từ lần khởi động gần nhất
     uptime_ms = kernel32.GetTickCount64()
+    uptime_td = timedelta(milliseconds=uptime_ms)
+    uptime_formatted = _format_uptime(uptime_td)
+    cpu_temp = _get_cpu_temperature()
+
     return SystemMetrics(
+        uptime_str=uptime_formatted,
+        cpu_temperature=cpu_temp,
         ram_usage_percent=float(memory_status.dwMemoryLoad),
-        uptime=timedelta(milliseconds=uptime_ms),
+        uptime=uptime_td,
     )
 
 
 def lock_workstation() -> None:
-    """Immediately lock the current interactive Windows session."""
     _require_windows()
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     if not user32.LockWorkStation():
@@ -75,54 +117,31 @@ def lock_workstation() -> None:
 
 
 def sleep_system(*, confirm: bool = False) -> None:
-    """Put the computer to sleep after explicit confirmation.
-
-    ``confirm`` must be exactly ``True``. The call may fail when the system's
-    power policy, hardware, or current privileges do not permit sleep.
-    """
     _require_windows()
     _require_confirmation(confirm)
     powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
     set_suspend_state = powrprof.SetSuspendState
     set_suspend_state.argtypes = [wintypes.BOOL, wintypes.BOOL, wintypes.BOOL]
     set_suspend_state.restype = wintypes.BOOL
-    # hibernate=False, force=False, wakeup-events disabled.
     if not set_suspend_state(False, False, False):
         raise WindowsSystemError(f"SetSuspendState failed (WinError {ctypes.get_last_error()})")
 
 
 def restart_system(*, delay_seconds: int = 0, force: bool = False, confirm: bool = False) -> None:
-
-    """Schedule a Windows restart after explicit confirmation.
-    ``delay_seconds`` must be a non-negative integer. Set ``force=True`` only
-    when it is acceptable for Windows to close applications without asking. """
     _run_shutdown_command(restart=True, delay_seconds=delay_seconds, force=force, confirm=confirm)
 
 
 def shutdown_system(*, delay_seconds: int = 0, force: bool = False, confirm: bool = False) -> None:
-
-    """Schedule a Windows shutdown after explicit confirmation.
-    ``delay_seconds`` must be a non-negative integer. Set ``force=True`` only
-    when it is acceptable for Windows to close applications without asking. """
-
     _run_shutdown_command(restart=False, delay_seconds=delay_seconds, force=force, confirm=confirm)
 
 
 def _run_shutdown_command(*, restart: bool, delay_seconds: int, force: bool, confirm: bool) -> None:
-    """Validate and run Windows' shutdown utility without a command shell."""
     _require_windows()
     _require_confirmation(confirm)
-    if not isinstance(delay_seconds, int) or isinstance(delay_seconds, bool) or delay_seconds < 0:
-        raise ValueError("delay_seconds must be a non-negative integer")
-
     command = ["shutdown.exe", "/r" if restart else "/s", "/t", str(delay_seconds)]
     if force:
         command.append("/f")
     try:
         subprocess.run(command, check=True, shell=False, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise WindowsSystemError("shutdown.exe was not found") from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        raise WindowsSystemError(f"Windows power command failed: {detail}") from exc
-
+    except Exception as exc:
+        raise WindowsSystemError(f"Windows power command failed: {exc}") from exc

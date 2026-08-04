@@ -1,5 +1,4 @@
-"""Utilities for listing, launching, and safely stopping Windows processes.
-
+﻿"""Utilities for listing, launching, and safely stopping Windows processes and Whitelisted Applications.
 Install the dependency with: pip install psutil
 """
 
@@ -10,7 +9,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Mapping
 
 import psutil
 
@@ -22,7 +21,7 @@ class ProcessInfo:
     pid: int
     name: str
     cpu_percent: float
-    memory_percent: float
+    ram_mb: float  
     is_gui_application: bool
 
 
@@ -45,13 +44,7 @@ def _visible_window_pids() -> set[int]:
 
 
 def list_processes(include_gui_status: bool = True) -> list[ProcessInfo]:
-
-    """Return all accessible running processes with CPU and memory percentages.
-    CPU usage is sampled across a short interval so it is meaningful rather than
-    the initial always-zero psutil value.  ``is_gui_application`` identifies
-    processes that own a main window when ``include_gui_status`` is true.
-    Access-denied and already-exited processes are skipped. """
-
+    """Return all accessible running processes with CPU percentage and RAM usage in MB."""
     processes = list(psutil.process_iter(["pid", "name"]))
     for process in processes:
         try:
@@ -62,35 +55,67 @@ def list_processes(include_gui_status: bool = True) -> list[ProcessInfo]:
     time.sleep(0.1)
     gui_pids = _visible_window_pids() if include_gui_status else set()
     results: list[ProcessInfo] = []
+    
     for process in processes:
         try:
             pid = process.pid
+            mem_info = process.memory_info()
+            ram_mb = round(mem_info.rss / (1024 * 1024), 2) 
+            
             results.append(
                 ProcessInfo(
                     pid=pid,
                     name=process.name() or "<unnamed>",
                     cpu_percent=round(process.cpu_percent(interval=None), 2),
-                    memory_percent=round(process.memory_percent(), 2),
+                    ram_mb=ram_mb,
                     is_gui_application=pid in gui_pids,
                 )
             )
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
+            
     return sorted(results, key=lambda item: (not item.is_gui_application, item.name.lower(), item.pid))
 
 
+def list_applications(allowed_applications: Mapping[str, Path]) -> list[dict]:
+    """Quản lý Module Application: Liệt kê trạng thái (đang chạy/không) và % CPU của các app Whitelist."""
+    running_processes = list(psutil.process_iter(["pid", "name", "exe"]))
+    for proc in running_processes:
+        try:
+            proc.cpu_percent(interval=None)
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            pass
+            
+    time.sleep(0.05)
+    app_list = []
+
+    for app_name, app_path in allowed_applications.items():
+        app_path_resolved = str(Path(app_path).resolve()).lower()
+        matched_pids = []
+        total_cpu = 0.0
+
+        for proc in running_processes:
+            try:
+                p_exe = proc.info.get("exe")
+                if p_exe and str(Path(p_exe).resolve()).lower() == app_path_resolved:
+                    matched_pids.append(proc.pid)
+                    total_cpu += proc.cpu_percent(interval=None)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                continue
+
+        app_list.append({
+            "name": app_name,
+            "path": str(app_path),
+            "is_running": len(matched_pids) > 0,
+            "pids": matched_pids,
+            "cpu_percent": round(total_cpu, 2)
+        })
+
+    return app_list
+
+
 def launch_application(command: str | os.PathLike[str] | Sequence[str]) -> subprocess.Popen[str]:
-    """Launch an executable or command and return its ``Popen`` handle.
-
-    Pass an executable path, a Windows command string, or a sequence such as
-    ``[r"C:\\Program Files\\App\\app.exe", "--flag"]``. ``shell=False`` is
-    always used to avoid command-shell injection.
-
-    Raises:
-        FileNotFoundError: The requested executable cannot be found.
-        PermissionError: Windows refused permission to launch it.
-        OSError: The operating system could not create the process.
-    """
+    """Khởi chạy ứng dụng nằm trong Whitelist."""
     if isinstance(command, os.PathLike):
         executable = Path(command)
         if not executable.is_file():
@@ -108,26 +133,35 @@ def launch_application(command: str | os.PathLike[str] | Sequence[str]) -> subpr
     return subprocess.Popen(args, shell=False, text=True)
 
 
-def stop_process(pid: int, timeout: float = 5.0) -> bool:
-    """Stop a process gracefully, then kill it if it does not exit in time.
+def stop_application_by_name(app_name: str, allowed_applications: Mapping[str, Path]) -> int:
+    """Tắt ứng dụng nằm trong Whitelist theo tên cấu hình."""
+    if app_name not in allowed_applications:
+        raise PermissionError(f"Application '{app_name}' is not in the whitelist.")
 
-    Returns ``True`` when a process was stopped. Returns ``False`` if the PID was
-    already absent. Raises ``ValueError`` for unsafe PIDs and ``psutil.AccessDenied``
-    when the current user lacks permission to control the process.
-    """
+    target_path = str(Path(allowed_applications[app_name]).resolve()).lower()
+    stopped_count = 0
+
+    for proc in psutil.process_iter(["pid", "exe"]):
+        try:
+            p_exe = proc.info.get("exe")
+            if p_exe and str(Path(p_exe).resolve()).lower() == target_path:
+                proc.terminate()
+                stopped_count += 1
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+
+    return stopped_count
+
+
+def stop_process(pid: int, timeout: float = 5.0) -> bool:
+    """Kill một tiến trình bất kỳ dựa trên PID."""
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise ValueError("pid must be a positive integer")
     if pid == os.getpid():
         raise ValueError("refusing to stop the current process")
-    if timeout <= 0:
-        raise ValueError("timeout must be greater than zero")
 
     try:
         process = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        return False
-
-    try:
         process.terminate()
         try:
             process.wait(timeout=timeout)
@@ -136,4 +170,4 @@ def stop_process(pid: int, timeout: float = 5.0) -> bool:
             process.wait(timeout=timeout)
         return True
     except psutil.NoSuchProcess:
-        return True
+        return False
