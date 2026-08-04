@@ -163,3 +163,5 @@ cython_debug/
 .idea/
 
 .agent_data/
+
+.DS_Store
