@@ -399,6 +399,18 @@ async def _handle_stream_control(
 
     if module == "screen":
         if action == "start":
+            # Yêu cầu consent trước khi bắt đầu stream màn hình
+            consent_request = {"request_id": request_id, "module": "screen_stream", "parameters": {}}
+            approved = await asyncio.get_event_loop().run_in_executor(
+                None, state.orchestrator.security.authorize_request, consent_request
+            )
+            if approved is None:
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="denied", data={"module": "screen", "status": "denied"},
+                    message="User denied screen stream permission",
+                ))
+                return
             await state.start_screen_stream(websocket)
             await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "screen", "status": "started"}))
         elif action == "stop":
@@ -410,6 +422,18 @@ async def _handle_stream_control(
     elif module == "webcam":
         camera_index = int(msg.get("camera_index", 0))
         if action == "start":
+            # Yêu cầu consent trước khi bắt đầu stream webcam
+            consent_request = {"request_id": request_id, "module": "camera_stream", "parameters": {}}
+            approved = await asyncio.get_event_loop().run_in_executor(
+                None, state.orchestrator.security.authorize_request, consent_request
+            )
+            if approved is None:
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="denied", data={"module": "webcam", "status": "denied"},
+                    message="User denied webcam stream permission",
+                ))
+                return
             await state.start_webcam_stream(websocket, camera_index)
             await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "webcam", "status": "started", "camera_index": camera_index}))
         elif action == "stop":

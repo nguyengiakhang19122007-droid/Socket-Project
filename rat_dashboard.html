@@ -846,7 +846,7 @@ function handleMessage(msg) {
     case 'stream_frame':
       handleStreamFrame(msg); break;
     case 'stream_control_result':
-      logInfo(`Stream ${msg.data?.module || ''}: ${msg.data?.status || msg.status}`); break;
+      handleStreamControlResult(msg); break;
     case 'pong':
       /* keepalive — bỏ qua */ break;
     case 'error':
@@ -981,6 +981,31 @@ function launchApp() {
       setTimeout(() => loadProcesses('applications'), 1200);
     } else { logErr('Launch failed: ' + (msg.message || msg.status)); }
   });
+}
+
+// ══════════════════════════════════════════════════════
+// STREAM CONTROL RESULT HANDLER
+// ══════════════════════════════════════════════════════
+function handleStreamControlResult(msg) {
+  const mod = msg.data?.module || '';
+  const status = msg.data?.status || msg.status;
+
+  if (status === 'denied') {
+    logErr(`Stream ${mod}: Permission denied by remote user`);
+    // Roll back UI state nếu bị từ chối
+    if (mod === 'screen' && screenStreaming) {
+      screenStreaming = false;
+      document.getElementById('screen-live-status').classList.remove('live');
+      document.getElementById('screen-fps').style.display = 'none';
+    } else if (mod === 'webcam' && webcamStreaming) {
+      webcamStreaming = false;
+      document.getElementById('webcam-live-status').classList.remove('live');
+      document.getElementById('webcam-fps').style.display = 'none';
+    }
+    updateStreamBtns();
+  } else {
+    logInfo(`Stream ${mod}: ${status}`);
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -1123,12 +1148,17 @@ function listFiles() {
         div.innerHTML = `
           <span class="file-icon">${isDir ? '📁' : '📄'}</span>
           <span class="file-name">${esc(p)}</span>
-          ${!isDir ? `<button class="btn-ghost btn-xs" onclick="readFile('${esc(p)}')">Read</button>` : ''}
+          ${!isDir ? `<button class="btn-ghost btn-xs" data-filepath="${esc(p)}">Read</button>` : ''}
         `;
-        if (isDir) div.onclick = () => {
-          document.getElementById('file-path-input').value = p;
-          listFiles();
-        };
+        if (isDir) {
+          div.onclick = () => {
+            document.getElementById('file-path-input').value = p;
+            listFiles();
+          };
+        } else {
+          const btn = div.querySelector('button[data-filepath]');
+          if (btn) btn.onclick = (e) => { e.stopPropagation(); readFile(btn.dataset.filepath); };
+        }
         el.appendChild(div);
       });
     } else {
