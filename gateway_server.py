@@ -54,10 +54,10 @@ from desktop_capture_utils import (
 
 DEFAULT_HOST = os.getenv("GATEWAY_HOST", "0.0.0.0")
 DEFAULT_PORT = int(os.getenv("GATEWAY_PORT", "8765"))
-DEFAULT_TOKEN = os.getenv(
-    "GATEWAY_TOKEN",
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-)
+
+# Sinh một lần khi process gateway khởi động.
+DEFAULT_TOKEN = secrets.token_hex(32)
+
 SCREEN_FPS = float(os.getenv("SCREEN_FPS", "60"))
 WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "60"))
 SCREEN_JPEG_QUALITY = int(os.getenv("SCREEN_JPEG_QUALITY", "65"))
@@ -604,18 +604,19 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    if args.generate_token:
-        print(f"Generated token: {secrets.token_hex(32)}")
-        print("Lưu token này vào biến môi trường GATEWAY_TOKEN trên cả hai máy.")
-        return
-
-    if len(args.token) < 32:
-        logger.warning(
-            "Token quá ngắn (< 32 ký tự). Hãy dùng --generate-token để tạo token an toàn."
-        )
+    print("\n" + "=" * 72)
+    print("GATEWAY TOKEN FOR THIS RUN:")
+    print(args.token)
+    print("=" * 72 + "\n", flush=True)
 
     try:
-        asyncio.run(run_gateway(host=args.host, port=args.port, token=args.token))
+        asyncio.run(
+            run_gateway(
+                host=args.host,
+                port=args.port,
+                token=args.token,
+            )
+        )
     except KeyboardInterrupt:
         logger.info("Gateway stopped by user.")
 
