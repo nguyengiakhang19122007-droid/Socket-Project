@@ -45,27 +45,34 @@ def _visible_window_pids() -> set[int]:
 
 def list_processes(include_gui_status: bool = True) -> list[ProcessInfo]:
     """Return all accessible running processes with CPU percentage and RAM usage in MB."""
-    processes = list(psutil.process_iter(["pid", "name"]))
-    for process in processes:
+    # Bước 1: Thu thập tất cả Process objects và gọi cpu_percent lần đầu (prime / baseline).
+    # psutil.process_iter() trả về cached Process objects theo PID, nên cùng object
+    # được dùng ở cả 2 bước — đảm bảo two-call pattern hoạt động đúng.
+    proc_objects: dict[int, psutil.Process] = {}
+    for process in psutil.process_iter(["pid", "name"]):
         try:
-            process.cpu_percent(interval=None)
+            process.cpu_percent(interval=None)  # Lần 1: luôn trả về 0.0 — chỉ để khởi tạo baseline
+            proc_objects[process.pid] = process
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             continue
 
-    time.sleep(0.1)
+    # Bước 2: Chờ đủ lâu để kernel tích lũy CPU time có thể đo được.
+    # 0.5s là ngưỡng tối thiểu thực tế; 0.1s quá ngắn với tiến trình ít hoạt động.
+    time.sleep(0.5)
+
     gui_pids = _visible_window_pids() if include_gui_status else set()
     results: list[ProcessInfo] = []
-    
-    for process in processes:
+
+    for pid, process in proc_objects.items():
         try:
-            pid = process.pid
             mem_info = process.memory_info()
-            ram_mb = round(mem_info.rss / (1024 * 1024), 2) 
-            
+            ram_mb = round(mem_info.rss / (1024 * 1024), 2)
+
             results.append(
                 ProcessInfo(
                     pid=pid,
                     name=process.name() or "<unnamed>",
+                    # Lần 2: tính % CPU thực dựa trên khoảng thời gian kể từ lần gọi đầu
                     cpu_percent=round(process.cpu_percent(interval=None), 2),
                     ram_mb=ram_mb,
                     is_gui_application=pid in gui_pids,
@@ -73,33 +80,39 @@ def list_processes(include_gui_status: bool = True) -> list[ProcessInfo]:
             )
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
-            
+
     return sorted(results, key=lambda item: (not item.is_gui_application, item.name.lower(), item.pid))
 
 
 def list_applications(allowed_applications: Mapping[str, Path]) -> list[dict]:
     """Quản lý Module Application: Liệt kê trạng thái (đang chạy/không) và % CPU của các app Whitelist."""
-    running_processes = list(psutil.process_iter(["pid", "name", "exe"]))
-    for proc in running_processes:
+    # Bước 1: Prime tất cả process objects — lưu vào dict để tái sử dụng cùng object ở bước 2.
+    # Dùng dict[pid -> process] thay vì list để tránh trường hợp process_iter trả về
+    # object khác nhau giữa 2 lần duyệt.
+    proc_objects: dict[int, psutil.Process] = {}
+    for proc in psutil.process_iter(["pid", "name", "exe"]):
         try:
-            proc.cpu_percent(interval=None)
+            proc.cpu_percent(interval=None)  # Lần 1: baseline, luôn trả về 0.0
+            proc_objects[proc.pid] = proc
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             pass
-            
-    time.sleep(0.05)
-    app_list = []
 
+    # Bước 2: Chờ tối thiểu 0.5s — đủ để hệ thống ghi nhận CPU time thực.
+    # 0.05s (50ms) cũ quá ngắn, dẫn đến mọi giá trị đều ra 0.0.
+    time.sleep(0.5)
+
+    app_list = []
     for app_name, app_path in allowed_applications.items():
         app_path_resolved = str(Path(app_path).resolve()).lower()
         matched_pids = []
         total_cpu = 0.0
 
-        for proc in running_processes:
+        for pid, proc in proc_objects.items():
             try:
                 p_exe = proc.info.get("exe")
                 if p_exe and str(Path(p_exe).resolve()).lower() == app_path_resolved:
-                    matched_pids.append(proc.pid)
-                    total_cpu += proc.cpu_percent(interval=None)
+                    matched_pids.append(pid)
+                    total_cpu += proc.cpu_percent(interval=None)  # Lần 2: giá trị thực
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 continue
 
