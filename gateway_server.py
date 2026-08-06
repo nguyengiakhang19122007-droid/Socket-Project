@@ -16,6 +16,10 @@ Cấu hình qua biến môi trường:
   GATEWAY_TOKEN        Token bí mật dùng để xác thực Web App
   SCREEN_FPS           Số frame/giây cho livestream màn hình (mặc định: 60)
   WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 60)
+  SCREEN_JPEG_QUALITY  Chất lượng JPEG màn hình, 1-100 (mặc định: 65)
+  SCREEN_MAX_WIDTH     Chiều rộng màn hình tối đa, 0 giữ nguyên (mặc định: 1280)
+  WEBCAM_JPEG_QUALITY  Chất lượng JPEG webcam, 1-100 (mặc định: 70)
+  WEBCAM_MAX_WIDTH     Chiều rộng webcam tối đa, 0 giữ nguyên (mặc định: 1280)
   LOG_LEVEL            Mức log: DEBUG / INFO / WARNING (mặc định: INFO)
 """
 
@@ -24,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
@@ -32,14 +37,16 @@ import time
 import uuid
 from typing import Any
 
-import cv2
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 
 # Import AgentOrchestrator từ agent_main
 from agent_main import AgentOrchestrator
 from agent_security import verify_gateway_token
-from desktop_capture_utils import capture_primary_screen_png, capture_camera_frame
+from desktop_capture_utils import (
+    CameraStreamCapture,
+    ScreenStreamCapture,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cấu hình mặc định
@@ -53,6 +60,10 @@ DEFAULT_TOKEN = os.getenv(
 )
 SCREEN_FPS = float(os.getenv("SCREEN_FPS", "60"))
 WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "60"))
+SCREEN_JPEG_QUALITY = int(os.getenv("SCREEN_JPEG_QUALITY", "65"))
+SCREEN_MAX_WIDTH = int(os.getenv("SCREEN_MAX_WIDTH", "1280"))
+WEBCAM_JPEG_QUALITY = int(os.getenv("WEBCAM_JPEG_QUALITY", "70"))
+WEBCAM_MAX_WIDTH = int(os.getenv("WEBCAM_MAX_WIDTH", "1280"))
 
 logger = logging.getLogger("gateway")
 
@@ -183,23 +194,26 @@ class GatewayState:
 
 
 async def _screen_stream_loop(websocket: ServerConnection, fps: float) -> None:
-    """Liên tục chụp màn hình và gửi frame qua WebSocket."""
+    """Capture JPEG frames using one persistent MSS session."""
     interval = 1.0 / max(fps, 0.5)
     logger.info("Screen stream started (%.1f fps)", fps)
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="screen-capture")
+    capture: ScreenStreamCapture | None = None
     try:
+        capture = await loop.run_in_executor(
+            executor, ScreenStreamCapture, SCREEN_JPEG_QUALITY, SCREEN_MAX_WIDTH
+        )
         while True:
             t_start = time.monotonic()
             try:
-                # Chạy trong executor để không chặn event loop
-                png_bytes = await asyncio.get_event_loop().run_in_executor(
-                    None, capture_primary_screen_png
-                )
-                frame_b64 = base64.b64encode(png_bytes).decode("utf-8")
+                jpeg_bytes = await loop.run_in_executor(executor, capture.read_jpeg)
+                frame_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
                 payload = json.dumps({
                     "type": "stream_frame",
                     "module": "screen",
-                    "data": {"image_base64": frame_b64},
-                })
+                    "data": {"image_base64": frame_b64, "mime": "image/jpeg"},
+                }, separators=(",", ":"))
                 await websocket.send(payload)
             except websockets.exceptions.ConnectionClosed:
                 break
@@ -212,31 +226,43 @@ async def _screen_stream_loop(websocket: ServerConnection, fps: float) -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        if capture is not None:
+            try:
+                await loop.run_in_executor(executor, capture.close)
+            except Exception:
+                logger.debug("Failed to close screen capture", exc_info=True)
+        executor.shutdown(wait=False, cancel_futures=True)
         logger.info("Screen stream stopped")
 
 
 async def _webcam_stream_loop(
     websocket: ServerConnection, camera_index: int, fps: float
 ) -> None:
-    """Liên tục chụp frame webcam và gửi qua WebSocket."""
+    """Capture JPEG frames using one persistent webcam handle."""
     interval = 1.0 / max(fps, 0.5)
     logger.info("Webcam stream started (index=%d, %.1f fps)", camera_index, fps)
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webcam-capture")
+    capture: CameraStreamCapture | None = None
     try:
+        capture = await loop.run_in_executor(
+            executor,
+            CameraStreamCapture,
+            camera_index,
+            fps,
+            WEBCAM_JPEG_QUALITY,
+            WEBCAM_MAX_WIDTH,
+        )
         while True:
             t_start = time.monotonic()
             try:
-                frame = await asyncio.get_event_loop().run_in_executor(
-                    None, capture_camera_frame, camera_index
-                )
-                success, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if not success:
-                    raise RuntimeError("Failed to encode webcam frame")
-                frame_b64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+                jpeg_bytes = await loop.run_in_executor(executor, capture.read_jpeg)
+                frame_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
                 payload = json.dumps({
                     "type": "stream_frame",
                     "module": "webcam",
-                    "data": {"image_base64": frame_b64},
-                })
+                    "data": {"image_base64": frame_b64, "mime": "image/jpeg"},
+                }, separators=(",", ":"))
                 await websocket.send(payload)
             except websockets.exceptions.ConnectionClosed:
                 break
@@ -249,6 +275,12 @@ async def _webcam_stream_loop(
     except asyncio.CancelledError:
         pass
     finally:
+        if capture is not None:
+            try:
+                await loop.run_in_executor(executor, capture.close)
+            except Exception:
+                logger.debug("Failed to close webcam capture", exc_info=True)
+        executor.shutdown(wait=False, cancel_futures=True)
         logger.info("Webcam stream stopped")
 
 
@@ -542,6 +574,8 @@ async def run_gateway(host: str, port: int, token: str) -> None:
         handler,
         host,
         port,
+        # JPEG is already compressed; per-message deflate wastes CPU here.
+        compression=None,
         # Tăng giới hạn kích thước message lên 10MB để xử lý ảnh base64
         max_size=10 * 1024 * 1024,
         # Ping mỗi 20s để phát hiện kết nối chết

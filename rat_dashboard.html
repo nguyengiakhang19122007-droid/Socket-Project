@@ -1070,7 +1070,7 @@ function updateStreamBtns() {
 function handleStreamFrame(msg) {
   const b64 = msg.data?.image_base64;
   if (!b64) return;
-  const mime = msg.module === 'webcam' ? 'image/jpeg' : 'image/png';
+  const mime = msg.data?.mime || (msg.module === 'webcam' ? 'image/jpeg' : 'image/png');
   if (msg.module === 'screen') {
     setStreamImage('screen-box', `data:${mime};base64,${b64}`);
     screenFrames++;
