@@ -177,6 +177,28 @@
 
   .nav-divider { width: 32px; height: 1px; background: var(--border); margin: 4px 0; }
 
+  .permission-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  .permission-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .permission-card.revoked { border-color: #ef444466; }
+  .permission-copy { flex: 1; min-width: 0; }
+  .permission-name { font-weight: 700; margin-bottom: 5px; }
+  .permission-modules { color: var(--text-dim); font: .68rem/1.45 var(--mono); word-break: break-word; }
+  .permission-state { font: .7rem var(--mono); color: var(--green); margin-top: 6px; }
+  .permission-card.revoked .permission-state { color: var(--red); }
+  .permission-note { color: var(--text-mid); font: .76rem/1.6 var(--mono); margin-bottom: 14px; }
+
   /* ── CONTENT ── */
   #content {
     flex: 1;
@@ -584,6 +606,11 @@
       <span class="nav-icon">⚡</span>
       <span>Power</span>
     </button>
+    <div class="nav-divider"></div>
+    <button class="nav-item" data-module="permissions" onclick="switchModule('permissions')">
+      <span class="nav-icon">🛡️</span>
+      <span>Policy</span>
+    </button>
   </nav>
 
   <!-- ── CONTENT ── -->
@@ -787,6 +814,24 @@
       </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════ -->
+    <!-- MODULE: PERMISSION STATUS (READ ONLY)          -->
+    <!-- ═══════════════════════════════════════════════ -->
+    <div id="mod-permissions" class="module">
+      <div class="mod-header">
+        <div class="mod-title"><span class="accent">08</span> · Permission Status</div>
+        <div class="mod-actions">
+          <button class="btn-ghost btn-sm" id="permission-refresh-btn" onclick="requestPermissions()" disabled>↻ Refresh</button>
+        </div>
+      </div>
+      <div class="mod-body">
+        <div class="permission-note" id="permission-note">
+          Read-only view. Permissions are controlled by the native panel on the Agent/Gateway machine.
+        </div>
+        <div class="permission-grid" id="permission-grid"></div>
+      </div>
+    </div>
+
     <!-- ── DELETE CONFIRM MODAL ── -->
 <div id="delete-modal">
   <div class="modal-box">
@@ -826,6 +871,7 @@ let webcamStreaming = false;
 let klRunning = false;
 let pendingRequests = {};
 let allProcesses = [];
+let currentPermissions = {};
 
 let screenFrames = 0, webcamFrames = 0;
 let screenFpsTs = Date.now(), webcamFpsTs = Date.now();
@@ -908,6 +954,8 @@ function handleMessage(msg) {
       handleStreamFrame(msg); break;
     case 'stream_control_result':
       handleStreamControlResult(msg); break;
+    case 'permission_state':
+      handlePermissionState(msg); break;
     case 'pong':
       /* keepalive — bỏ qua */ break;
     case 'error':
@@ -936,6 +984,58 @@ function sendCommand(module, parameters, cb) {
 
 function sendStreamControl(module, action, extra) {
   send({ type:'stream_control', module, action, ...(extra||{}) });
+}
+
+function requestPermissions() {
+  send({ type:'permission_get', request_id:newRid() });
+}
+
+function handlePermissionState(msg) {
+  updatePermissions(msg.data?.permissions || {});
+  if (msg.data?.changed_features?.length) {
+    logInfo(`Policy changed on Agent/Gateway: ${msg.data.changed_features.join(', ')}`);
+  }
+}
+
+function updatePermissions(permissions) {
+  currentPermissions = permissions;
+  renderPermissionPanel();
+  applyPermissionControls();
+
+  if (permissions.screen && !permissions.screen.enabled) setStreamRevoked('screen');
+  if (permissions.webcam && !permissions.webcam.enabled) setStreamRevoked('webcam');
+  if (permissions.keylogger && !permissions.keylogger.enabled) {
+    klRunning = false;
+    document.getElementById('kl-dot').classList.remove('on');
+    document.getElementById('kl-status-text').textContent = 'Revoked';
+  }
+}
+
+function setStreamRevoked(module) {
+  if (module === 'screen') screenStreaming = false;
+  else webcamStreaming = false;
+  document.getElementById(module + '-live-status').classList.remove('live');
+  document.getElementById(module + '-fps').style.display = 'none';
+  updateStreamBtns();
+}
+
+function renderPermissionPanel() {
+  const grid = document.getElementById('permission-grid');
+  const entries = Object.entries(currentPermissions);
+  grid.innerHTML = '';
+  entries.forEach(([feature, item]) => {
+    const card = document.createElement('div');
+    card.className = 'permission-card' + (item.enabled ? '' : ' revoked');
+    card.innerHTML = `
+      <div class="permission-copy">
+        <div class="permission-name">${esc(item.label || feature)}</div>
+        <div class="permission-modules">${(item.modules || []).map(esc).join(' · ')}</div>
+        <div class="permission-state">${item.enabled ? '● ALLOWED' : '● REVOKED'}</div>
+      </div>`;
+    grid.appendChild(card);
+  });
+  document.getElementById('permission-note').textContent =
+    'Read-only view. Use Agent Permission Control on the Agent/Gateway machine to change policy.';
 }
 
 function handleCommandResult(msg) {
@@ -988,7 +1088,7 @@ function renderAppTable(procs) {
       </td>
       <td>${ram.toFixed(1)} MB</td>
       <td><span class="badge badge-ok">Running</span></td>
-      <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+      <td><button class="btn-danger btn-xs" data-feature="processes" onclick="killPid(${p.pid})" ${featureEnabled('processes') ? '' : 'disabled'}>Kill</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -1012,7 +1112,7 @@ function renderProcTable(procs) {
       </td>
       <td>${ram.toFixed(1)} MB</td>
       <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
-      <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+      <td><button class="btn-danger btn-xs" data-feature="processes" onclick="killPid(${p.pid})" ${featureEnabled('processes') ? '' : 'disabled'}>Kill</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -1210,8 +1310,8 @@ function listFiles() {
           <span class="file-icon">${isDir ? '📁' : '📄'}</span>
           <span class="file-name">${esc(p)}</span>
           ${!isDir ? `
-            <button class="btn-ghost btn-xs" data-action="read" data-filepath="${esc(p)}">Read</button>
-            <button class="btn-danger btn-xs" data-action="delete" data-filepath="${esc(p)}">🗑</button>
+            <button class="btn-ghost btn-xs" data-feature="files" data-action="read" data-filepath="${esc(p)}" ${featureEnabled('files') ? '' : 'disabled'}>Read</button>
+            <button class="btn-danger btn-xs" data-feature="files" data-action="delete" data-filepath="${esc(p)}" ${featureEnabled('files') ? '' : 'disabled'}>🗑</button>
           ` : ''}
         `;
         if (isDir) {
@@ -1311,8 +1411,36 @@ const CTRL_IDS = [
   'load-proc-btn','refresh-app-btn','launch-btn',
   'list-files-btn','metrics-btn',
   'lock-btn','sleep-btn','restart-btn','shutdown-btn',
-  'kl-start','kl-stop','kl-get'
+  'kl-start','kl-stop','kl-get','permission-refresh-btn'
 ];
+
+const FEATURE_CONTROL_IDS = {
+  applications: ['launch-btn'],
+  processes: ['load-proc-btn', 'refresh-app-btn'],
+  screen: ['screen-stream-btn', 'snap-screen-btn'],
+  webcam: ['webcam-stream-btn', 'snap-cam-btn'],
+  keylogger: ['kl-start', 'kl-stop', 'kl-get'],
+  files: ['list-files-btn'],
+  power_system: ['metrics-btn', 'lock-btn', 'sleep-btn', 'restart-btn', 'shutdown-btn']
+};
+
+function featureEnabled(feature) {
+  return currentPermissions[feature]?.enabled !== false;
+}
+
+function applyPermissionControls() {
+  Object.entries(FEATURE_CONTROL_IDS).forEach(([feature, ids]) => {
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !authenticated || !featureEnabled(feature);
+    });
+  });
+  document.querySelectorAll('[data-feature]').forEach(el => {
+    el.disabled = !authenticated || !featureEnabled(el.dataset.feature);
+  });
+  const refresh = document.getElementById('permission-refresh-btn');
+  if (refresh) refresh.disabled = !authenticated;
+}
 
 function setControlsEnabled(en) {
   CTRL_IDS.forEach(id => {
@@ -1321,6 +1449,7 @@ function setControlsEnabled(en) {
   });
   // power buttons are plain buttons, handle separately
   document.querySelectorAll('.power-btn').forEach(b => b.disabled = !en);
+  if (en) applyPermissionControls();
 }
 
 // ══════════════════════════════════════════════════════

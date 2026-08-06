@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from websockets.asyncio.client import ClientConnection, connect
 APP_DIRECTORY = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WindowsAgent"
 CONSENT_FILE = APP_DIRECTORY / "authorization.json"
 AUDIT_LOG = APP_DIRECTORY / "agent_audit.log"
+PERMISSIONS_FILE = APP_DIRECTORY / "feature_permissions.json"
 TOKEN_HEADER = "X-Agent-Token"
 
 # Module CHỈ ĐỌC: Được duyệt tự động để phục vụ cơ chế Refresh 5s không gây phiền
@@ -34,6 +36,32 @@ SENSITIVE_MODULES = frozenset({
 
 SUPPORTED_MODULES = READONLY_MODULES | SENSITIVE_MODULES
 CONSENT_REQUIRED_MODULES = SENSITIVE_MODULES
+
+# Quyền được quản lý theo nhóm tính năng để người dùng không phải bật/tắt
+# từng lệnh nội bộ. Mặc định giữ tương thích ngược: mọi nhóm đều được bật.
+FEATURE_MODULES: dict[str, frozenset[str]] = {
+    "applications": frozenset({"application_list", "application_launch", "application_stop"}),
+    "processes": frozenset({"list_processes", "process_terminate"}),
+    "screen": frozenset({"screen_capture", "screen_stream"}),
+    "webcam": frozenset({"camera_capture", "camera_stream"}),
+    "keylogger": frozenset({"keylogger"}),
+    "files": frozenset({"file_list", "file_read", "file_write", "file_delete"}),
+    "power_system": frozenset({"system_metrics", "power_control"}),
+}
+FEATURE_LABELS = {
+    "applications": "Applications",
+    "processes": "Processes",
+    "screen": "Screen capture",
+    "webcam": "Webcam",
+    "keylogger": "Keyboard capture",
+    "files": "Sandbox files",
+    "power_system": "Power & system",
+}
+MODULE_FEATURE = {
+    module: feature
+    for feature, modules in FEATURE_MODULES.items()
+    for module in modules
+}
 
 _MB_YESNO = 0x00000004
 _MB_ICONWARNING = 0x00000030
@@ -88,7 +116,9 @@ class SecurityController:
         self._allowed_applications = {
             name: Path(path).resolve() for name, path in (allowed_applications or {}).items()
         }
+        self._permission_lock = threading.RLock()
         _prepare_storage()
+        self._permissions = self._read_permissions()
 
     @property
     def allowed_applications(self) -> dict[str, Path]:
@@ -112,6 +142,13 @@ class SecurityController:
             if not self.ensure_initial_consent():
                 return None
             request = self._validate_request(raw_request)
+
+            # Lệnh dừng luôn được phép để một tính năng có thể được cleanup sau
+            # khi quyền đã bị thu hồi. Mọi thao tác khác phải qua policy động.
+            is_stop = request.parameters.get("action") == "stop"
+            if not is_stop and not self.is_module_allowed(request.module):
+                self._audit(request.request_id, request.module, "denied: feature disabled")
+                return None
             
             # Nếu thuộc nhóm Sensitive -> Hiện Popup xin quyền Consent Dialog
             if request.module in CONSENT_REQUIRED_MODULES:
@@ -130,6 +167,44 @@ class SecurityController:
         except Exception as exc:
             self._audit(request_id, module, f"rejected: {type(exc).__name__}")
             raise SecurityError("Remote request failed security validation") from exc
+
+    def permission_snapshot(self) -> dict[str, dict[str, Any]]:
+        """Trả về bản sao policy an toàn để gửi cho Web App."""
+        with self._permission_lock:
+            return {
+                feature: {
+                    "enabled": bool(self._permissions.get(feature, True)),
+                    "label": FEATURE_LABELS[feature],
+                    "modules": sorted(FEATURE_MODULES[feature]),
+                }
+                for feature in FEATURE_MODULES
+            }
+
+    def is_module_allowed(self, module: str) -> bool:
+        feature = MODULE_FEATURE.get(module)
+        if feature is None:
+            return False
+        with self._permission_lock:
+            return bool(self._permissions.get(feature, True))
+
+    def set_feature_permission(self, feature: str, enabled: bool) -> dict[str, dict[str, Any]]:
+        return self.set_feature_permissions({feature: enabled})
+
+    def set_feature_permissions(self, updates: Mapping[str, bool]) -> dict[str, dict[str, Any]]:
+        """Cập nhật một hoặc nhiều quyền trong một lần ghi file nguyên tử."""
+        if not updates:
+            raise SecurityError("At least one permission update is required")
+        for feature, enabled in updates.items():
+            if feature not in FEATURE_MODULES:
+                raise SecurityError(f"Unknown feature: {feature}")
+            if type(enabled) is not bool:
+                raise SecurityError("enabled must be a boolean")
+        with self._permission_lock:
+            self._permissions.update(updates)
+            self._write_permissions()
+        for feature, enabled in updates.items():
+            self._audit("local-policy", feature, "enabled" if enabled else "revoked")
+        return self.permission_snapshot()
 
     def _validate_request(self, raw_request: Mapping[str, Any]) -> RemoteRequest:
         request_id = raw_request.get("request_id")
@@ -164,6 +239,29 @@ class SecurityController:
         temporary = CONSENT_FILE.with_suffix(".tmp")
         temporary.write_text(json.dumps({"managed_terminal_consent": approved, "updated_at": _utc_timestamp()}), encoding="utf-8")
         temporary.replace(CONSENT_FILE)
+
+    def _read_permissions(self) -> dict[str, bool]:
+        defaults = {feature: True for feature in FEATURE_MODULES}
+        try:
+            content = json.loads(PERMISSIONS_FILE.read_text(encoding="utf-8"))
+            stored = content.get("permissions", {})
+            if isinstance(stored, dict):
+                for feature in defaults:
+                    if type(stored.get(feature)) is bool:
+                        defaults[feature] = stored[feature]
+        except Exception:
+            pass
+        return defaults
+
+    def _write_permissions(self) -> None:
+        temporary = PERMISSIONS_FILE.with_suffix(".tmp")
+        payload = {
+            "version": 1,
+            "permissions": self._permissions,
+            "updated_at": _utc_timestamp(),
+        }
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(PERMISSIONS_FILE)
 
     def _audit(self, request_id: str, module: str, decision: str) -> None:
         entry = {"timestamp": _utc_timestamp(), "request_id": request_id, "module": module, "decision": decision}

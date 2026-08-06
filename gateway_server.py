@@ -47,6 +47,7 @@ from desktop_capture_utils import (
     CameraStreamCapture,
     ScreenStreamCapture,
 )
+from local_permission_control import LocalPermissionControl
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cấu hình mặc định
@@ -138,6 +139,10 @@ class GatewayState:
         async with self._lock:
             await self._cancel_stream_task(self._screen_tasks, websocket, "screen")
             await self._cancel_stream_task(self._webcam_tasks, websocket, "webcam")
+            if not self._screen_tasks:
+                self.orchestrator.stop_active_feature("screen")
+            if not self._webcam_tasks:
+                self.orchestrator.stop_active_feature("webcam")
             client_id = self._authenticated_clients.pop(websocket, "unknown")
             logger.info("Client disconnected: id=%s", client_id)
 
@@ -154,10 +159,13 @@ class GatewayState:
                 name=f"screen-{self.client_id(websocket)}",
             )
             self._screen_tasks[websocket] = task
+            self.orchestrator.screen_stream_indicator.start()
 
     async def stop_screen_stream(self, websocket: ServerConnection) -> None:
         async with self._lock:
             await self._cancel_stream_task(self._screen_tasks, websocket, "screen")
+            if not self._screen_tasks:
+                self.orchestrator.stop_active_feature("screen")
 
     async def start_webcam_stream(self, websocket: ServerConnection, camera_index: int = 0) -> None:
         async with self._lock:
@@ -167,10 +175,51 @@ class GatewayState:
                 name=f"webcam-{self.client_id(websocket)}",
             )
             self._webcam_tasks[websocket] = task
+            self.orchestrator.camera_stream_indicator.start()
 
     async def stop_webcam_stream(self, websocket: ServerConnection) -> None:
         async with self._lock:
             await self._cancel_stream_task(self._webcam_tasks, websocket, "webcam")
+            if not self._webcam_tasks:
+                self.orchestrator.stop_active_feature("webcam")
+
+    async def set_feature_permissions(self, updates: dict[str, bool]) -> dict[str, dict[str, Any]]:
+        """Cập nhật policy cục bộ và dừng ngay các tài nguyên bị thu hồi."""
+        snapshot = self.orchestrator.security.set_feature_permissions(updates)
+        revoked = {feature for feature, enabled in updates.items() if not enabled}
+        if revoked:
+            async with self._lock:
+                if "screen" in revoked:
+                    for client in list(self._screen_tasks):
+                        await self._cancel_stream_task(self._screen_tasks, client, "screen")
+                if "webcam" in revoked:
+                    for client in list(self._webcam_tasks):
+                        await self._cancel_stream_task(self._webcam_tasks, client, "webcam")
+                for feature in revoked:
+                    self.orchestrator.stop_active_feature(feature)
+        return snapshot
+
+    async def apply_local_permission_update(self, updates: dict[str, bool]) -> dict[str, dict[str, Any]]:
+        """Điểm vào dành riêng cho cửa sổ native trên máy Agent/Gateway."""
+        snapshot = await self.set_feature_permissions(updates)
+        await self.broadcast_permission_state(changed_features=sorted(updates))
+        logger.warning("Local policy changed: %s", updates)
+        return snapshot
+
+    async def broadcast_permission_state(self, changed_features: list[str] | None = None) -> None:
+        payload = _build_response(
+            msg_type="permission_state",
+            data={
+                "permissions": self.orchestrator.security.permission_snapshot(),
+                "changed_features": changed_features or [],
+            },
+        )
+        clients = list(self._authenticated_clients)
+        if clients:
+            await asyncio.gather(
+                *(client.send(payload) for client in clients),
+                return_exceptions=True,
+            )
 
     @staticmethod
     async def _cancel_stream_task(
@@ -361,17 +410,49 @@ async def _handle_client(websocket: ServerConnection, state: GatewayState) -> No
         status="ok",
         message=f"Authenticated. Gateway ready. Client ID: {state.client_id(websocket)}",
     ))
+    await websocket.send(_build_response(
+        msg_type="permission_state",
+        data={
+            "permissions": state.orchestrator.security.permission_snapshot(),
+            "managed_by": "agent_gateway_local_control",
+        },
+    ))
     logger.info("Client %s fully authenticated", state.client_id(websocket))
+
+    # Lệnh hệ thống chạy tuần tự qua worker riêng. Vòng nhận message vẫn rảnh để
+    # WebSocket vẫn nhận trạng thái quyền trong khi lệnh blocking đang chạy.
+    command_queue: asyncio.Queue[str | bytes] = asyncio.Queue()
+
+    async def command_worker() -> None:
+        while True:
+            queued_message = await command_queue.get()
+            try:
+                await _route_message(queued_message, websocket, state)
+            finally:
+                command_queue.task_done()
+
+    worker_task = asyncio.create_task(
+        command_worker(), name=f"commands-{state.client_id(websocket)}"
+    )
 
     # ── Bước 2: Vòng lặp nhận và xử lý lệnh ─────────────────────────────────
     try:
         async for raw_message in websocket:
-            await _route_message(raw_message, websocket, state)
+            try:
+                incoming_type = _parse_message(raw_message).get("type")
+            except ValueError:
+                incoming_type = None
+            if incoming_type == "command":
+                await command_queue.put(raw_message)
+            else:
+                await _route_message(raw_message, websocket, state)
     except websockets.exceptions.ConnectionClosed as exc:
         logger.info("Connection closed: %s (code=%s)", state.client_id(websocket), exc.code)
     except Exception:
         logger.exception("Unexpected error for client %s", state.client_id(websocket))
     finally:
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
         await state.remove_client(websocket)
 
 
@@ -389,6 +470,17 @@ async def _route_message(
 
     msg_type = msg.get("type", "")
     request_id = msg.get("request_id") or str(uuid.uuid4())[:8]
+
+    if msg_type == "permission_get":
+        await websocket.send(_build_response(
+            msg_type="permission_state",
+            request_id=request_id,
+            data={
+                "permissions": state.orchestrator.security.permission_snapshot(),
+                "managed_by": "agent_gateway_local_control",
+            },
+        ))
+        return
 
     # ── Streaming control ──────────────────────────────────────────────────────
     if msg_type == "stream_control":
@@ -410,7 +502,7 @@ async def _route_message(
         msg_type="error",
         request_id=request_id,
         status="error",
-        message=f"Unknown message type: {msg_type!r}. Valid types: command, stream_control, ping",
+        message=f"Unknown message type: {msg_type!r}. Valid types: command, stream_control, permission_get, ping",
     ))
 
 
@@ -443,6 +535,13 @@ async def _handle_stream_control(
                     message="User denied screen stream permission",
                 ))
                 return
+            if not state.orchestrator.security.is_module_allowed("screen_stream"):
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="denied", data={"module": "screen", "status": "denied"},
+                    message="Screen permission was revoked while consent was pending",
+                ))
+                return
             await state.start_screen_stream(websocket)
             await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "screen", "status": "started"}))
         elif action == "stop":
@@ -464,6 +563,13 @@ async def _handle_stream_control(
                     msg_type="stream_control_result", request_id=request_id,
                     status="denied", data={"module": "webcam", "status": "denied"},
                     message="User denied webcam stream permission",
+                ))
+                return
+            if not state.orchestrator.security.is_module_allowed("camera_stream"):
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="denied", data={"module": "webcam", "status": "denied"},
+                    message="Webcam permission was revoked while consent was pending",
                 ))
                 return
             await state.start_webcam_stream(websocket, camera_index)
@@ -547,7 +653,7 @@ async def _handle_command(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-async def run_gateway(host: str, port: int, token: str) -> None:
+async def run_gateway(host: str, port: int, token: str, show_local_control: bool = True) -> None:
     """Khởi động WebSocket Gateway Server."""
     allowed_apps = _load_allowed_applications()
     logger.info("Allowed applications: %s", list(allowed_apps.keys()) or "(none)")
@@ -559,6 +665,20 @@ async def run_gateway(host: str, port: int, token: str) -> None:
         return
 
     state = GatewayState(token=token, orchestrator=orchestrator)
+    local_control: LocalPermissionControl | None = None
+    if show_local_control:
+        loop = asyncio.get_running_loop()
+
+        def submit_local_update(updates: dict[str, bool]):
+            return asyncio.run_coroutine_threadsafe(
+                state.apply_local_permission_update(updates), loop
+            )
+
+        local_control = LocalPermissionControl(
+            snapshot_provider=orchestrator.security.permission_snapshot,
+            submit_update=submit_local_update,
+        )
+        local_control.start()
 
     logger.info("=" * 60)
     logger.info("  WebSocket Gateway Server starting")
@@ -570,20 +690,24 @@ async def run_gateway(host: str, port: int, token: str) -> None:
     async def handler(websocket: ServerConnection) -> None:
         await _handle_client(websocket, state)
 
-    async with serve(
-        handler,
-        host,
-        port,
-        # JPEG is already compressed; per-message deflate wastes CPU here.
-        compression=None,
-        # Tăng giới hạn kích thước message lên 10MB để xử lý ảnh base64
-        max_size=10 * 1024 * 1024,
-        # Ping mỗi 20s để phát hiện kết nối chết
-        ping_interval=20,
-        ping_timeout=20,
-    ) as server:
-        logger.info("Gateway is running. Press Ctrl+C to stop.")
-        await server.serve_forever()
+    try:
+        async with serve(
+            handler,
+            host,
+            port,
+            # JPEG is already compressed; per-message deflate wastes CPU here.
+            compression=None,
+            # Tăng giới hạn kích thước message lên 10MB để xử lý ảnh base64
+            max_size=10 * 1024 * 1024,
+            # Ping mỗi 20s để phát hiện kết nối chết
+            ping_interval=20,
+            ping_timeout=20,
+        ) as server:
+            logger.info("Gateway is running. Press Ctrl+C to stop.")
+            await server.serve_forever()
+    finally:
+        if local_control is not None:
+            local_control.stop()
 
 
 def main() -> None:
@@ -591,6 +715,11 @@ def main() -> None:
     parser.add_argument("--host", default=DEFAULT_HOST, help="Host để bind (mặc định: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Cổng lắng nghe (mặc định: 8765)")
     parser.add_argument("--token", default=DEFAULT_TOKEN, help="Token xác thực bí mật")
+    parser.add_argument(
+        "--no-local-control",
+        action="store_true",
+        help="Không mở cửa sổ quản lý quyền cục bộ (dành cho máy headless)",
+    )
     parser.add_argument(
         "--generate-token",
         action="store_true",
@@ -615,6 +744,7 @@ def main() -> None:
                 host=args.host,
                 port=args.port,
                 token=args.token,
+                show_local_control=not args.no_local_control,
             )
         )
     except KeyboardInterrupt:

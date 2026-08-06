@@ -14,7 +14,7 @@ from typing import Any
 
 import cv2 
 
-from agent_security import SecurityController
+from agent_security import MODULE_FEATURE, SecurityController
 
 from client_agent import show_notification
 
@@ -68,7 +68,9 @@ class AgentOrchestrator:
     async def dispatch_command(self, raw_message: str | dict[str, Any]) -> dict[str, Any]:
         try:
             request_data = json.loads(raw_message) if isinstance(raw_message, str) else raw_message
-            validated_request = self.security.authorize_request(request_data)
+            # Popup consent và các thao tác hệ thống là blocking; chạy trong worker
+            # để gateway vẫn nhận được lệnh thu hồi quyền từ một client local khác.
+            validated_request = await asyncio.to_thread(self.security.authorize_request, request_data)
             
             if validated_request is None:
                 return {"status": "denied", "message": "User or policy rejected the request."}
@@ -77,15 +79,35 @@ class AgentOrchestrator:
             params = validated_request.parameters
             req_id = validated_request.request_id
 
-            logging.info("Executing module: %s (Request ID: %s)", module, req_id)
-            show_notification("Windows Agent Active", f"Module: {module.replace('_', ' ').title()}")
+            # Kiểm tra lần hai để khép cửa sổ race giữa consent và lúc thực thi.
+            if params.get("action") != "stop" and not self.security.is_module_allowed(module):
+                return {"status": "denied", "message": "Feature permission was revoked."}
 
-            result_data = self._execute_module(module, params)
+            result_data = await asyncio.to_thread(self._execute_authorized, module, params, req_id)
+            # Không trả dữ liệu về Web App nếu quyền bị thu hồi trong lúc thao tác
+            # blocking đang hoàn tất. Đồng thời cleanup nếu đó là feature dài hạn.
+            if params.get("action") != "stop" and not self.security.is_module_allowed(module):
+                self.stop_active_feature(MODULE_FEATURE.get(module, ""))
+                return {"status": "denied", "message": "Feature permission was revoked during execution."}
             return {"status": "success", "request_id": req_id, "module": module, "data": result_data}
 
         except Exception as exc:
             logging.exception("Error executing command")
             return {"status": "error", "message": str(exc)}
+
+    def _execute_authorized(self, module: str, params: dict[str, Any], request_id: str) -> Any:
+        logging.info("Executing module: %s (Request ID: %s)", module, request_id)
+        show_notification("Windows Agent Active", f"Module: {module.replace('_', ' ').title()}")
+        return self._execute_module(module, params)
+
+    def stop_active_feature(self, feature: str) -> None:
+        """Nhả tài nguyên dài hạn ngay khi policy của feature bị thu hồi."""
+        if feature == "keylogger":
+            self.keylogger.stop()
+        elif feature == "screen":
+            self.screen_stream_indicator.stop()
+        elif feature == "webcam":
+            self.camera_stream_indicator.stop()
 
     def _execute_module(self, module: str, params: dict[str, Any]) -> Any:
         # 1. MODULE APPLICATION
