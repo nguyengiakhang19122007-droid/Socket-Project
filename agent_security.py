@@ -22,13 +22,14 @@ AUDIT_LOG = APP_DIRECTORY / "agent_audit.log"
 TOKEN_HEADER = "X-Agent-Token"
 
 # Module CHỈ ĐỌC: Được duyệt tự động để phục vụ cơ chế Refresh 5s không gây phiền
-READONLY_MODULES = frozenset({"system_metrics", "list_processes", "application_list", "file_list", "file_read"})
+READONLY_MODULES = frozenset({"system_metrics", "list_processes", "application_list", "file_list"})
 
 # Module NHẠY CẢM: Phải hiện Popup xin quyền (Consent Dialog)
+# file_read được xếp vào nhóm nhạy cảm vì có thể dùng để tải file về máy điều khiển
 SENSITIVE_MODULES = frozenset({
     "screen_capture", "screen_stream", "camera_capture", "camera_stream",
     "process_terminate", "power_control", "keylogger",
-    "file_write", "file_delete", "application_launch", "application_stop"
+    "file_read", "file_write", "file_delete", "application_launch", "application_stop"
 })
 
 SUPPORTED_MODULES = READONLY_MODULES | SENSITIVE_MODULES

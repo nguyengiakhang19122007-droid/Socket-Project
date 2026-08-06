@@ -433,6 +433,51 @@
     display: none; line-height: 1.6;
   }
 
+  /* ── DELETE CONFIRM MODAL ── */
+  #delete-modal {
+    display: none;
+    position: fixed; inset: 0; z-index: 999;
+    background: rgba(0,0,0,.65);
+    align-items: center; justify-content: center;
+  }
+  #delete-modal.open { display: flex; }
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    min-width: 340px;
+    max-width: 480px;
+    box-shadow: 0 0 40px rgba(239,68,68,.25);
+  }
+  .modal-title {
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--red);
+    margin-bottom: 12px;
+  }
+  .modal-path {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: .78rem;
+    color: var(--yellow);
+    margin-bottom: 16px;
+    word-break: break-all;
+  }
+  .modal-warn {
+    font-size: .78rem;
+    color: var(--text-mid);
+    margin-bottom: 18px;
+    line-height: 1.6;
+  }
+  .modal-warn span { color: var(--red); font-weight: 700; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
   /* ── CONSOLE ── */
   #console-output {
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
@@ -742,7 +787,23 @@
       </div>
     </div>
 
-    <!-- ── CONSOLE (always visible at bottom) ── -->
+    <!-- ── DELETE CONFIRM MODAL ── -->
+<div id="delete-modal">
+  <div class="modal-box">
+    <div class="modal-title">⚠ Xác nhận xóa file</div>
+    <div class="modal-path" id="modal-filepath">—</div>
+    <div class="modal-warn">
+      Hành động này <span>không thể hoàn tác</span>. File sẽ bị xóa vĩnh viễn khỏi máy agent.<br>
+      Bạn có chắc chắn muốn tiếp tục?
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeDeleteModal()">Hủy</button>
+      <button class="btn-danger" onclick="confirmDelete()">🗑 Xóa file</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── CONSOLE (always visible at bottom) ── -->
     <div id="console-panel">
       <div class="console-header">
         <span>Console</span>
@@ -1148,7 +1209,10 @@ function listFiles() {
         div.innerHTML = `
           <span class="file-icon">${isDir ? '📁' : '📄'}</span>
           <span class="file-name">${esc(p)}</span>
-          ${!isDir ? `<button class="btn-ghost btn-xs" data-filepath="${esc(p)}">Read</button>` : ''}
+          ${!isDir ? `
+            <button class="btn-ghost btn-xs" data-action="read" data-filepath="${esc(p)}">Read</button>
+            <button class="btn-danger btn-xs" data-action="delete" data-filepath="${esc(p)}">🗑</button>
+          ` : ''}
         `;
         if (isDir) {
           div.onclick = () => {
@@ -1156,8 +1220,10 @@ function listFiles() {
             listFiles();
           };
         } else {
-          const btn = div.querySelector('button[data-filepath]');
-          if (btn) btn.onclick = (e) => { e.stopPropagation(); readFile(btn.dataset.filepath); };
+          const readBtn = div.querySelector('button[data-action="read"]');
+          const delBtn  = div.querySelector('button[data-action="delete"]');
+          if (readBtn) readBtn.onclick = (e) => { e.stopPropagation(); readFile(readBtn.dataset.filepath); };
+          if (delBtn)  delBtn.onclick  = (e) => { e.stopPropagation(); openDeleteModal(delBtn.dataset.filepath); };
         }
         el.appendChild(div);
       });
@@ -1278,6 +1344,50 @@ function logRecv(msg) { addLog('recv', '↓', msg); }
 function logErr(msg)  { addLog('err',  '✕', msg); }
 function logInfo(msg) { addLog('info', '·', msg); }
 function clearLog()   { document.getElementById('console-output').innerHTML = ''; }
+
+// ══════════════════════════════════════════════════════
+// DELETE FILE
+// ══════════════════════════════════════════════════════
+let _pendingDeletePath = null;
+
+function openDeleteModal(path) {
+  _pendingDeletePath = path;
+  document.getElementById('modal-filepath').textContent = path;
+  document.getElementById('delete-modal').classList.add('open');
+}
+
+function closeDeleteModal() {
+  _pendingDeletePath = null;
+  document.getElementById('delete-modal').classList.remove('open');
+}
+
+function confirmDelete() {
+  const path = _pendingDeletePath;
+  if (!path) return;
+  closeDeleteModal();
+  sendCommand('file_delete', { path }, (msg) => {
+    if (msg.status === 'ok' || msg.status === 'success') {
+      logInfo(`Đã xóa: ${path}`);
+      // Ẩn file viewer nếu đang xem file vừa xóa
+      const box = document.getElementById('file-content-box');
+      if (box.style.display !== 'none') { box.style.display = 'none'; box.textContent = ''; }
+      // Refresh danh sách file
+      listFiles();
+    } else {
+      logErr('file_delete: ' + (msg.message || msg.status));
+    }
+  });
+}
+
+// Đóng modal khi click nền
+document.getElementById('delete-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeDeleteModal();
+});
+
+// Đóng modal bằng Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeDeleteModal();
+});
 
 // ══════════════════════════════════════════════════════
 // UTILS
