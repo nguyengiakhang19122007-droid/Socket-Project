@@ -123,14 +123,27 @@ def lock_workstation() -> None:
 
 
 def sleep_system(*, confirm: bool = False) -> None:
+    """Put Windows into Sleep/Standby, never the Hibernate power state."""
     _require_windows()
     _require_confirmation(confirm)
-    powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
-    set_suspend_state = powrprof.SetSuspendState
-    set_suspend_state.argtypes = [wintypes.BOOL, wintypes.BOOL, wintypes.BOOL]
-    set_suspend_state.restype = wintypes.BOOL
-    if not set_suspend_state(False, False, False):
-        raise WindowsSystemError(f"SetSuspendState failed (WinError {ctypes.get_last_error()})")
+    # PowerState.Suspend = 0 (Sleep/Standby). Do not replace this with
+    # PowerState.Hibernate = 1 or with ``shutdown.exe /h``.
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$ok = [System.Windows.Forms.Application]::SetSuspendState("
+        "[System.Windows.Forms.PowerState]::Suspend, $false, $false); "
+        "if (-not $ok) { throw 'Windows rejected the Sleep request.' }"
+    )
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            check=True,
+            shell=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        raise WindowsSystemError(f"Windows Sleep command failed: {exc}") from exc
 
 
 def restart_system(*, delay_seconds: int = 0, force: bool = False, confirm: bool = False) -> None:
