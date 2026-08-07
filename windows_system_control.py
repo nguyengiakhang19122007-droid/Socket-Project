@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -14,6 +15,12 @@ import psutil
 
 class WindowsSystemError(RuntimeError):
     """Raised when a Windows API or system command cannot be completed."""
+
+
+_POWER_SCHEME = "SCHEME_CURRENT"
+_SLEEP_SUBGROUP = "SUB_SLEEP"
+_HYBRID_SLEEP_SETTING = "HYBRIDSLEEP"
+_POWER_INDEX_PATTERN = re.compile(r"0x([0-9a-fA-F]{8})")
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,28 +129,85 @@ def lock_workstation() -> None:
         raise WindowsSystemError(f"LockWorkStation failed (WinError {ctypes.get_last_error()})")
 
 
-def sleep_system(*, confirm: bool = False) -> None:
-    """Put Windows into Sleep/Standby, never the Hibernate power state."""
-    _require_windows()
-    _require_confirmation(confirm)
-    # PowerState.Suspend = 0 (Sleep/Standby). Do not replace this with
-    # PowerState.Hibernate = 1 or with ``shutdown.exe /h``.
+def _run_power_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            shell=False,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise WindowsSystemError(f"Windows power command failed: {details}") from exc
+    except OSError as exc:
+        raise WindowsSystemError(f"Windows power command could not start: {exc}") from exc
+
+
+def _read_hybrid_sleep_values() -> tuple[int, int]:
+    result = _run_power_command([
+        "powercfg.exe",
+        "/query",
+        _POWER_SCHEME,
+        _SLEEP_SUBGROUP,
+        _HYBRID_SLEEP_SETTING,
+    ])
+    # The labels printed by powercfg are localized, while its AC/DC setting
+    # values retain the language-independent 0x00000000 format.
+    matches = _POWER_INDEX_PATTERN.findall(result.stdout)
+    if len(matches) < 2:
+        raise WindowsSystemError(
+            "Windows did not expose the AC/DC Hybrid Sleep values. "
+            "Run 'powercfg /a' to verify that this computer supports Sleep."
+        )
+    return int(matches[-2], 16), int(matches[-1], 16)
+
+
+def _set_hybrid_sleep_values(ac_value: int, dc_value: int) -> None:
+    _run_power_command([
+        "powercfg.exe", "/setacvalueindex", _POWER_SCHEME,
+        _SLEEP_SUBGROUP, _HYBRID_SLEEP_SETTING, str(ac_value),
+    ])
+    _run_power_command([
+        "powercfg.exe", "/setdcvalueindex", _POWER_SCHEME,
+        _SLEEP_SUBGROUP, _HYBRID_SLEEP_SETTING, str(dc_value),
+    ])
+    _run_power_command(["powercfg.exe", "/setactive", _POWER_SCHEME])
+
+
+def _request_windows_suspend() -> None:
+    # PowerState.Suspend = 0. PowerState.Hibernate = 1 and is intentionally
+    # never used here.
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$ok = [System.Windows.Forms.Application]::SetSuspendState("
         "[System.Windows.Forms.PowerState]::Suspend, $false, $false); "
         "if (-not $ok) { throw 'Windows rejected the Sleep request.' }"
     )
+    _run_power_command([
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script,
+    ])
+
+
+def sleep_system(*, confirm: bool = False) -> None:
+    """Enter pure Sleep/Standby while preserving the user's power plan."""
+    _require_windows()
+    _require_confirmation(confirm)
+    original_ac, original_dc = _read_hybrid_sleep_values()
     try:
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            check=True,
-            shell=False,
-            capture_output=True,
-            text=True,
-        )
-    except Exception as exc:
-        raise WindowsSystemError(f"Windows Sleep command failed: {exc}") from exc
+        # Index 0 means Hybrid Sleep is disabled. Apply and read it back before
+        # suspend so Windows cannot silently use the S3 + hiberfile hybrid path.
+        _set_hybrid_sleep_values(0, 0)
+        if _read_hybrid_sleep_values() != (0, 0):
+            raise WindowsSystemError(
+                "Windows policy kept Hybrid Sleep enabled; pure Sleep was cancelled."
+            )
+        _request_windows_suspend()
+    finally:
+        # SetSuspendState returns after resume; restore the exact AC/DC values
+        # that were active before this request.
+        _set_hybrid_sleep_values(original_ac, original_dc)
 
 
 def restart_system(*, delay_seconds: int = 0, force: bool = False, confirm: bool = False) -> None:

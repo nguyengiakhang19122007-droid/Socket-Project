@@ -425,6 +425,34 @@ def _build_response(
     return json.dumps(payload)
 
 
+def _connection_close_code(exc: websockets.exceptions.ConnectionClosed) -> int | None:
+    """Read a close code without using the deprecated ConnectionClosed.code."""
+    if exc.rcvd is not None:
+        return exc.rcvd.code
+    if exc.sent is not None:
+        return exc.sent.code
+    return None
+
+
+async def _send_response_safely(
+    websocket: ServerConnection,
+    payload: str,
+    *,
+    context: str,
+) -> bool:
+    """Send a response, treating an early client disconnect as normal cleanup."""
+    try:
+        await websocket.send(payload)
+        return True
+    except websockets.exceptions.ConnectionClosed as exc:
+        logger.info(
+            "Connection closed before %s could be sent (code=%s)",
+            context,
+            _connection_close_code(exc),
+        )
+        return False
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Handler chính cho mỗi WebSocket connection
 # ──────────────────────────────────────────────────────────────────────────────
@@ -440,58 +468,96 @@ async def _handle_client(websocket: ServerConnection, state: GatewayState) -> No
     try:
         raw_auth = await asyncio.wait_for(websocket.recv(), timeout=10.0)
         auth_msg = _parse_message(raw_auth)
+    except websockets.exceptions.ConnectionClosed as exc:
+        logger.info(
+            "Connection from %s closed during authentication (code=%s)",
+            remote,
+            _connection_close_code(exc),
+        )
+        return
     except asyncio.TimeoutError:
         logger.warning("Auth timeout from %s", remote)
-        await websocket.send(_build_response(msg_type="auth_result", status="error", message="Authentication timeout"))
+        await _send_response_safely(
+            websocket,
+            _build_response(msg_type="auth_result", status="error", message="Authentication timeout"),
+            context="authentication timeout response",
+        )
         return
-    except Exception as exc:
+    except (TypeError, ValueError, UnicodeDecodeError) as exc:
         logger.warning("Bad auth message from %s: %s", remote, exc)
-        await websocket.send(_build_response(msg_type="auth_result", status="error", message="Invalid auth message"))
+        await _send_response_safely(
+            websocket,
+            _build_response(msg_type="auth_result", status="error", message="Invalid auth message"),
+            context="invalid authentication response",
+        )
         return
 
     if auth_msg.get("type") != "auth":
-        await websocket.send(_build_response(msg_type="auth_result", status="error", message="First message must be type=auth"))
+        await _send_response_safely(
+            websocket,
+            _build_response(msg_type="auth_result", status="error", message="First message must be type=auth"),
+            context="authentication protocol response",
+        )
         return
 
     provided_token = auth_msg.get("token", "")
     if not await state.authenticate(websocket, provided_token):
         logger.warning("Auth failed from %s (wrong token)", remote)
-        await websocket.send(_build_response(msg_type="auth_result", status="error", message="Invalid token"))
+        await _send_response_safely(
+            websocket,
+            _build_response(msg_type="auth_result", status="error", message="Invalid token"),
+            context="invalid token response",
+        )
         return  # Ngắt kết nối ngay lập tức
 
-    # Xác thực thành công
-    await websocket.send(_build_response(
-        msg_type="auth_result",
-        status="ok",
-        message=f"Authenticated. Gateway ready. Client ID: {state.client_id(websocket)}",
-    ))
-    await websocket.send(_build_response(
-        msg_type="permission_state",
-        data={
-            "permissions": state.orchestrator.security.permission_snapshot(),
-            "managed_by": "agent_gateway_local_control",
-        },
-    ))
-    logger.info("Client %s fully authenticated", state.client_id(websocket))
-
-    # Lệnh hệ thống chạy tuần tự qua worker riêng. Vòng nhận message vẫn rảnh để
-    # WebSocket vẫn nhận trạng thái quyền trong khi lệnh blocking đang chạy.
-    command_queue: asyncio.Queue[str | bytes] = asyncio.Queue()
-
-    async def command_worker() -> None:
-        while True:
-            queued_message = await command_queue.get()
-            try:
-                await _route_message(queued_message, websocket, state)
-            finally:
-                command_queue.task_done()
-
-    worker_task = asyncio.create_task(
-        command_worker(), name=f"commands-{state.client_id(websocket)}"
-    )
-
-    # ── Bước 2: Vòng lặp nhận và xử lý lệnh ─────────────────────────────────
+    worker_task: asyncio.Task[None] | None = None
     try:
+        # Xác thực thành công. Từ đây trở đi, finally luôn gỡ client khỏi state,
+        # kể cả khi trình duyệt đóng trước lúc nhận auth_result.
+        auth_sent = await _send_response_safely(
+            websocket,
+            _build_response(
+                msg_type="auth_result",
+                status="ok",
+                message=f"Authenticated. Gateway ready. Client ID: {state.client_id(websocket)}",
+            ),
+            context="successful authentication response",
+        )
+        if not auth_sent:
+            return
+
+        permissions_sent = await _send_response_safely(
+            websocket,
+            _build_response(
+                msg_type="permission_state",
+                data={
+                    "permissions": state.orchestrator.security.permission_snapshot(),
+                    "managed_by": "agent_gateway_local_control",
+                },
+            ),
+            context="initial permission state",
+        )
+        if not permissions_sent:
+            return
+        logger.info("Client %s fully authenticated", state.client_id(websocket))
+
+        # Lệnh hệ thống chạy tuần tự qua worker riêng. Vòng nhận message vẫn rảnh để
+        # WebSocket vẫn nhận trạng thái quyền trong khi lệnh blocking đang chạy.
+        command_queue: asyncio.Queue[str | bytes] = asyncio.Queue()
+
+        async def command_worker() -> None:
+            while True:
+                queued_message = await command_queue.get()
+                try:
+                    await _route_message(queued_message, websocket, state)
+                finally:
+                    command_queue.task_done()
+
+        worker_task = asyncio.create_task(
+            command_worker(), name=f"commands-{state.client_id(websocket)}"
+        )
+
+        # ── Bước 2: Vòng lặp nhận và xử lý lệnh ─────────────────────────────
         async for raw_message in websocket:
             try:
                 incoming_type = _parse_message(raw_message).get("type")
@@ -502,12 +568,17 @@ async def _handle_client(websocket: ServerConnection, state: GatewayState) -> No
             else:
                 await _route_message(raw_message, websocket, state)
     except websockets.exceptions.ConnectionClosed as exc:
-        logger.info("Connection closed: %s (code=%s)", state.client_id(websocket), exc.code)
+        logger.info(
+            "Connection closed: %s (code=%s)",
+            state.client_id(websocket),
+            _connection_close_code(exc),
+        )
     except Exception:
         logger.exception("Unexpected error for client %s", state.client_id(websocket))
     finally:
-        worker_task.cancel()
-        await asyncio.gather(worker_task, return_exceptions=True)
+        if worker_task is not None:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
         await state.remove_client(websocket)
 
 
