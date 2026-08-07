@@ -48,6 +48,55 @@ class _MemoryStatusEx(ctypes.Structure):
     ]
 
 
+class _BatteryReportingScale(ctypes.Structure):
+    _fields_ = [
+        ("Granularity", wintypes.DWORD),
+        ("Capacity", wintypes.DWORD),
+    ]
+
+
+class _SystemPowerCapabilities(ctypes.Structure):
+    """SYSTEM_POWER_CAPABILITIES layout used by current Windows versions."""
+
+    _fields_ = [
+        ("PowerButtonPresent", ctypes.c_ubyte),
+        ("SleepButtonPresent", ctypes.c_ubyte),
+        ("LidPresent", ctypes.c_ubyte),
+        ("SystemS1", ctypes.c_ubyte),
+        ("SystemS2", ctypes.c_ubyte),
+        ("SystemS3", ctypes.c_ubyte),
+        ("SystemS4", ctypes.c_ubyte),
+        ("SystemS5", ctypes.c_ubyte),
+        ("HiberFilePresent", ctypes.c_ubyte),
+        ("FullWake", ctypes.c_ubyte),
+        ("VideoDimPresent", ctypes.c_ubyte),
+        ("ApmPresent", ctypes.c_ubyte),
+        ("UpsPresent", ctypes.c_ubyte),
+        ("ThermalControl", ctypes.c_ubyte),
+        ("ProcessorThrottle", ctypes.c_ubyte),
+        ("ProcessorMinThrottle", ctypes.c_ubyte),
+        ("ProcessorThrottleScale", ctypes.c_ubyte),
+        ("spare2", ctypes.c_ubyte * 4),
+        ("ProcessorMaxThrottle", ctypes.c_ubyte),
+        ("FastSystemS4", ctypes.c_ubyte),
+        ("Hiberboot", ctypes.c_ubyte),
+        ("WakeAlarmPresent", ctypes.c_ubyte),
+        ("AoAc", ctypes.c_ubyte),
+        ("DiskSpinDown", ctypes.c_ubyte),
+        ("spare3", ctypes.c_ubyte * 8),
+        ("HiberFileType", ctypes.c_ubyte),
+        ("AoAcConnectivitySupported", ctypes.c_ubyte),
+        ("SystemBatteriesPresent", ctypes.c_ubyte),
+        ("BatteriesAreShortTerm", ctypes.c_ubyte),
+        ("BatteryScale", _BatteryReportingScale * 3),
+        ("AcOnLineWake", wintypes.DWORD),
+        ("SoftLidWake", wintypes.DWORD),
+        ("RtcWake", wintypes.DWORD),
+        ("MinDeviceWakeState", wintypes.DWORD),
+        ("DefaultLowLatencyWake", wintypes.DWORD),
+    ]
+
+
 def _require_windows() -> None:
     if os.name != "nt":
         raise OSError("windows_system_control can only run on Windows")
@@ -190,10 +239,46 @@ def _request_windows_suspend() -> None:
     ])
 
 
+def _supports_modern_standby() -> bool:
+    powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
+    get_capabilities = powrprof.GetPwrCapabilities
+    get_capabilities.argtypes = [ctypes.POINTER(_SystemPowerCapabilities)]
+    get_capabilities.restype = ctypes.c_ubyte  # Win32 BOOLEAN, not BOOL
+    capabilities = _SystemPowerCapabilities()
+    if not get_capabilities(ctypes.byref(capabilities)):
+        raise WindowsSystemError(
+            f"GetPwrCapabilities failed (WinError {ctypes.get_last_error()})"
+        )
+    return bool(capabilities.AoAc)
+
+
+def _request_modern_standby() -> None:
+    """Start the screen-off phase that enters S0 Low Power Idle."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    send_message = user32.SendMessageW
+    send_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    send_message.restype = wintypes.LPARAM
+
+    hwnd_broadcast = 0xFFFF
+    wm_syscommand = 0x0112
+    sc_monitorpower = 0xF170
+    monitor_power_off = 2
+    send_message(hwnd_broadcast, wm_syscommand, sc_monitorpower, monitor_power_off)
+
+
 def sleep_system(*, confirm: bool = False) -> None:
-    """Enter pure Sleep/Standby while preserving the user's power plan."""
+    """Enter the Sleep model supported by this Windows computer."""
     _require_windows()
     _require_confirmation(confirm)
+
+    if _supports_modern_standby():
+        # S0 Low Power Idle doesn't support S3 or Hybrid Sleep. Turning off the
+        # display starts the Modern Standby transition managed by Windows.
+        _request_modern_standby()
+        return
+
+    # Traditional S1-S3 system: prevent the active plan from combining S3 with
+    # a hibernation file, then restore the user's values after resume.
     original_ac, original_dc = _read_hybrid_sleep_values()
     try:
         # Index 0 means Hybrid Sleep is disabled. Apply and read it back before

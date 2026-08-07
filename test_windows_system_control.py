@@ -9,11 +9,12 @@ from windows_system_control import WindowsSystemError
 
 class SleepSystemTests(unittest.TestCase):
     @mock.patch.object(windows_system_control, "_require_windows")
+    @mock.patch.object(windows_system_control, "_supports_modern_standby", return_value=False)
     @mock.patch.object(windows_system_control, "_request_windows_suspend")
     @mock.patch.object(windows_system_control, "_set_hybrid_sleep_values")
     @mock.patch.object(windows_system_control, "_read_hybrid_sleep_values")
     def test_sleep_disables_hybrid_then_restores_power_plan(
-        self, read_values, set_values, request_suspend, _require_windows
+        self, read_values, set_values, request_suspend, _supports_s0, _require_windows
     ):
         read_values.side_effect = [(1, 0), (0, 0)]
 
@@ -23,11 +24,12 @@ class SleepSystemTests(unittest.TestCase):
         request_suspend.assert_called_once_with()
 
     @mock.patch.object(windows_system_control, "_require_windows")
+    @mock.patch.object(windows_system_control, "_supports_modern_standby", return_value=False)
     @mock.patch.object(windows_system_control, "_request_windows_suspend")
     @mock.patch.object(windows_system_control, "_set_hybrid_sleep_values")
     @mock.patch.object(windows_system_control, "_read_hybrid_sleep_values")
     def test_sleep_restores_power_plan_when_suspend_fails(
-        self, read_values, set_values, request_suspend, _require_windows
+        self, read_values, set_values, request_suspend, _supports_s0, _require_windows
     ):
         read_values.side_effect = [(1, 1), (0, 0)]
         request_suspend.side_effect = WindowsSystemError("Suspend failed")
@@ -38,11 +40,25 @@ class SleepSystemTests(unittest.TestCase):
         self.assertEqual(set_values.call_args_list, [mock.call(0, 0), mock.call(1, 1)])
 
     @mock.patch.object(windows_system_control, "_require_windows")
+    @mock.patch.object(windows_system_control, "_supports_modern_standby")
     @mock.patch.object(windows_system_control, "_read_hybrid_sleep_values")
-    def test_sleep_still_requires_confirmation(self, read_values, _require_windows):
+    def test_sleep_still_requires_confirmation(self, read_values, supports_s0, _require_windows):
         with self.assertRaises(PermissionError):
             windows_system_control.sleep_system(confirm=False)
 
+        read_values.assert_not_called()
+        supports_s0.assert_not_called()
+
+    @mock.patch.object(windows_system_control, "_require_windows")
+    @mock.patch.object(windows_system_control, "_request_modern_standby")
+    @mock.patch.object(windows_system_control, "_supports_modern_standby", return_value=True)
+    @mock.patch.object(windows_system_control, "_read_hybrid_sleep_values")
+    def test_modern_standby_skips_irrelevant_hybrid_sleep_setting(
+        self, read_values, _supports_s0, request_s0, _require_windows
+    ):
+        windows_system_control.sleep_system(confirm=True)
+
+        request_s0.assert_called_once_with()
         read_values.assert_not_called()
 
     @mock.patch.object(windows_system_control, "_run_power_command")
