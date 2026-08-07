@@ -1215,6 +1215,8 @@
                     <div class="mod-actions">
                         <input id="file-path-input" class="field field-sm" type="text" value="." placeholder="Path or ." style="width:220px">
                         <button class="btn-ghost btn-sm" id="list-files-btn" onclick="listFiles()" disabled>→ Browse</button>
+                        <button class="btn-purple btn-sm" id="upload-btn" onclick="openUploadModal()" disabled>⬆ Upload</button>
+                        <input type="file" id="upload-file-input" multiple style="display:none" onchange="handleUploadFiles(this.files)">
                     </div>
                 </div>
                 <div class="mod-body">
@@ -1308,6 +1310,41 @@
                     <div class="modal-actions">
                         <button class="btn-ghost" onclick="closeDeleteModal()">Hủy</button>
                         <button class="btn-danger" onclick="confirmDelete()">🗑 Xóa file</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── UPLOAD MODAL ── -->
+            <div id="upload-modal" style="display:none;position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.65);align-items:center;justify-content:center">
+                <div class="modal-box" style="border-color:var(--purple);box-shadow:0 0 40px rgba(139,92,246,.25);min-width:420px">
+                    <div class="modal-title" style="color:var(--purple)">⬆ Upload File</div>
+                    <div style="margin-bottom:10px;font-size:.78rem;color:var(--text-mid)">
+                        Destination folder:
+                        <span id="upload-dest-label" style="color:var(--accent);font-family:var(--mono);font-size:.78rem"></span>
+                    </div>
+
+                    <!-- Drop zone -->
+                    <div id="upload-dropzone"
+                         style="border:2px dashed var(--purple);border-radius:var(--radius);padding:28px 16px;text-align:center;cursor:pointer;transition:background .15s;margin-bottom:12px"
+                         onclick="document.getElementById('upload-file-input').click()"
+                         ondragover="event.preventDefault();this.style.background='rgba(139,92,246,.12)'"
+                         ondragleave="this.style.background=''"
+                         ondrop="event.preventDefault();this.style.background='';handleUploadFiles(event.dataTransfer.files)">
+                        <div style="font-size:1.8rem;margin-bottom:6px;opacity:.5">📂</div>
+                        <div style="font-family:var(--mono);font-size:.75rem;color:var(--text-mid)">
+                            Click or drag &amp; drop files here
+                        </div>
+                    </div>
+
+                    <!-- Queue list -->
+                    <div id="upload-queue" style="max-height:180px;overflow-y:auto;margin-bottom:14px;display:none">
+                        <div style="font-size:.65rem;font-family:var(--mono);letter-spacing:.12em;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px">Queue</div>
+                        <div id="upload-queue-list"></div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn-ghost" onclick="closeUploadModal()">Cancel</button>
+                        <button class="btn-purple" id="upload-confirm-btn" onclick="startUpload()" disabled>⬆ Upload All</button>
                     </div>
                 </div>
             </div>
@@ -1418,7 +1455,7 @@
                 case 'stream_control_result':
                     handleStreamControlResult(msg); break;
                 case 'pong':
-              /* keepalive — bỏ qua */ break;
+                  /* keepalive — bỏ qua */ break;
                 case 'error':
                     logErr('Server: ' + msg.message); break;
                 default:
@@ -1487,18 +1524,18 @@
                 const cpu = Math.min(p.cpu || 0, 100);
                 const ram = p.ram_mb || p.ram || 0;
                 tr.innerHTML = `
-              <td>${p.pid}</td>
-              <td>${esc(p.name)}</td>
-              <td>
-                <div class="cpu-bar-wrap">
-                  <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
-                  <span>${cpu.toFixed(1)}%</span>
-                </div>
-              </td>
-              <td>${ram.toFixed(1)} MB</td>
-              <td><span class="badge badge-ok">Running</span></td>
-              <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
-            `;
+                  <td>${p.pid}</td>
+                  <td>${esc(p.name)}</td>
+                  <td>
+                    <div class="cpu-bar-wrap">
+                      <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+                      <span>${cpu.toFixed(1)}%</span>
+                    </div>
+                  </td>
+                  <td>${ram.toFixed(1)} MB</td>
+                  <td><span class="badge badge-ok">Running</span></td>
+                  <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+                `;
                 tbody.appendChild(tr);
             });
         }
@@ -1511,18 +1548,18 @@
                 const cpu = Math.min(p.cpu || 0, 100);
                 const ram = p.ram_mb || p.ram || 0;
                 tr.innerHTML = `
-              <td>${p.pid}</td>
-              <td>${esc(p.name)}</td>
-              <td>
-                <div class="cpu-bar-wrap">
-                  <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
-                  <span>${cpu.toFixed(1)}%</span>
-                </div>
-              </td>
-              <td>${ram.toFixed(1)} MB</td>
-              <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
-              <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
-            `;
+                  <td>${p.pid}</td>
+                  <td>${esc(p.name)}</td>
+                  <td>
+                    <div class="cpu-bar-wrap">
+                      <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+                      <span>${cpu.toFixed(1)}%</span>
+                    </div>
+                  </td>
+                  <td>${ram.toFixed(1)} MB</td>
+                  <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
+                  <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+                `;
                 tbody.appendChild(tr);
             });
         }
@@ -1716,14 +1753,14 @@
                         const div = document.createElement('div');
                         div.className = 'file-item';
                         div.innerHTML = `
-                  <span class="file-icon">${isDir ? '📁' : '📄'}</span>
-                  <span class="file-name">${esc(p)}</span>
-                  ${!isDir ? `
-                    <button class="btn-ghost btn-xs"  data-action="read"     data-filepath="${esc(p)}">Read</button>
-                    <button class="btn-ok    btn-xs"  data-action="download" data-filepath="${esc(p)}">Download</button>
-                    <button class="btn-danger btn-xs" data-action="delete"   data-filepath="${esc(p)}">🗑</button>
-                  ` : ''}
-                `;
+                      <span class="file-icon">${isDir ? '📁' : '📄'}</span>
+                      <span class="file-name">${esc(p)}</span>
+                      ${!isDir ? `
+                        <button class="btn-ghost btn-xs"  data-action="read"     data-filepath="${esc(p)}">Read</button>
+                        <button class="btn-ok    btn-xs"  data-action="download" data-filepath="${esc(p)}">Download</button>
+                        <button class="btn-danger btn-xs" data-action="delete"   data-filepath="${esc(p)}">🗑</button>
+                      ` : ''}
+                    `;
                         if (isDir) {
                             div.onclick = () => {
                                 document.getElementById('file-path-input').value = p;
@@ -1856,7 +1893,7 @@
             'screen-stream-btn', 'snap-screen-btn',
             'webcam-stream-btn', 'snap-cam-btn',
             'load-proc-btn', 'refresh-app-btn', 'launch-btn',
-            'list-files-btn', 'metrics-btn',
+            'list-files-btn', 'upload-btn', 'metrics-btn',
             'lock-btn', 'sleep-btn', 'restart-btn', 'shutdown-btn',
             'kl-start', 'kl-stop', 'kl-get'
         ];
@@ -1977,6 +2014,147 @@
         // Đóng modal bằng Escape
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') closeDeleteModal();
+        });
+
+        // ══════════════════════════════════════════════════════
+        // UPLOAD FILE
+        // ══════════════════════════════════════════════════════
+        let _uploadQueue = []; // [{file, name, status, rowEl, progressEl}]
+
+        function openUploadModal() {
+            _uploadQueue = [];
+            document.getElementById('upload-queue-list').innerHTML = '';
+            document.getElementById('upload-queue').style.display = 'none';
+            document.getElementById('upload-confirm-btn').disabled = true;
+            // Reset dropzone về trạng thái ban đầu mỗi lần mở
+            document.getElementById('upload-dropzone').style.pointerEvents = '';
+            document.getElementById('upload-dropzone').style.background = '';
+            document.getElementById('upload-file-input').value = '';
+
+            const dest = document.getElementById('file-path-input').value.trim() || '.';
+            document.getElementById('upload-dest-label').textContent = dest;
+
+            document.getElementById('upload-modal').style.display = 'flex';
+        }
+
+        function closeUploadModal() {
+            document.getElementById('upload-modal').style.display = 'none';
+            // Luôn restore dropzone để lần mở modal sau hoạt động bình thường
+            document.getElementById('upload-dropzone').style.pointerEvents = '';
+            document.getElementById('upload-dropzone').style.background = '';
+            document.getElementById('upload-file-input').value = '';
+        }
+
+        function handleUploadFiles(files) {
+            if (!files || !files.length) return;
+            const listEl = document.getElementById('upload-queue-list');
+
+            Array.from(files).forEach(file => {
+                // Avoid duplicate names in queue
+                if (_uploadQueue.some(q => q.name === file.name)) return;
+
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(34,40,64,.4);font-family:var(--mono);font-size:.75rem';
+
+                const sizeKb = (file.size / 1024).toFixed(1);
+                const statusSpan = document.createElement('span');
+                statusSpan.style.cssText = 'margin-left:auto;font-size:.68rem;color:var(--text-dim)';
+                statusSpan.textContent = `${sizeKb} KB`;
+
+                const progressBar = document.createElement('div');
+                progressBar.style.cssText = 'height:3px;background:var(--purple);width:0%;border-radius:2px;margin-top:2px;transition:width .3s';
+
+                const nameEl = document.createElement('div');
+                nameEl.style.flex = '1';
+                nameEl.innerHTML = `<div style="color:var(--text)">${esc(file.name)}</div>`;
+                nameEl.appendChild(progressBar);
+
+                row.appendChild(document.createTextNode('📄'));
+                row.appendChild(nameEl);
+                row.appendChild(statusSpan);
+                listEl.appendChild(row);
+
+                _uploadQueue.push({ file, name: file.name, status: 'pending', rowEl: row, statusEl: statusSpan, progressEl: progressBar });
+            });
+
+            if (_uploadQueue.length) {
+                document.getElementById('upload-queue').style.display = 'block';
+                document.getElementById('upload-confirm-btn').disabled = false;
+            }
+            // Reset input so user can add more files
+            document.getElementById('upload-file-input').value = '';
+        }
+
+        async function startUpload() {
+            if (!_uploadQueue.length) return;
+            document.getElementById('upload-confirm-btn').disabled = true;
+            document.getElementById('upload-dropzone').style.pointerEvents = 'none';
+
+            const destFolder = document.getElementById('file-path-input').value.trim() || '.';
+            let successCount = 0, failCount = 0;
+
+            for (const item of _uploadQueue) {
+                if (item.status !== 'pending') continue;
+                item.statusEl.textContent = 'Reading…';
+                item.statusEl.style.color = 'var(--yellow)';
+
+                try {
+                    // Read file as base64
+                    const b64 = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]);
+                        reader.onerror = () => reject(new Error('FileReader error'));
+                        reader.readAsDataURL(item.file);
+                    });
+
+                    // Build destination path: destFolder\filename
+                    const sep = destFolder.includes('/') ? '/' : '\\';
+                    const destPath = destFolder === '.' ? item.name : `${destFolder}${sep}${item.name}`;
+
+                    item.statusEl.textContent = 'Uploading…';
+                    item.progressEl.style.width = '50%';
+
+                    await new Promise((resolve) => {
+                        sendCommand('file_write', { path: destPath, content_base64: b64 }, (msg) => {
+                            if (msg.status === 'ok' || msg.status === 'success') {
+                                item.status = 'done';
+                                item.statusEl.textContent = '✓ Done';
+                                item.statusEl.style.color = 'var(--green)';
+                                item.progressEl.style.width = '100%';
+                                item.progressEl.style.background = 'var(--green)';
+                                successCount++;
+                            } else {
+                                item.status = 'error';
+                                const reason = msg.status === 'denied' ? 'Denied' : (msg.message || msg.status);
+                                item.statusEl.textContent = `✕ ${reason}`;
+                                item.statusEl.style.color = 'var(--red)';
+                                item.progressEl.style.background = 'var(--red)';
+                                failCount++;
+                            }
+                            resolve();
+                        });
+                    });
+
+                } catch (err) {
+                    item.status = 'error';
+                    item.statusEl.textContent = `✕ ${err.message}`;
+                    item.statusEl.style.color = 'var(--red)';
+                    failCount++;
+                }
+            }
+
+            logInfo(`Upload complete: ${successCount} succeeded, ${failCount} failed`);
+            if (successCount > 0) {
+                // Refresh file list after upload
+                setTimeout(() => { listFiles(); closeUploadModal(); }, 800);
+            } else {
+                document.getElementById('upload-confirm-btn').disabled = false;
+                document.getElementById('upload-dropzone').style.pointerEvents = '';
+            }
+        }
+
+        document.getElementById('upload-modal').addEventListener('click', function (e) {
+            if (e.target === this) closeUploadModal();
         });
 
         // ══════════════════════════════════════════════════════
