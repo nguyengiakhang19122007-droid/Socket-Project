@@ -577,9 +577,28 @@
         /* ── POWER MODULE ── */
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 10px;
             margin-bottom: 4px;
+        }
+
+        .cpu-gauge-wrap {
+            margin-top: 8px;
+        }
+
+        .cpu-gauge-track {
+            background: var(--surface3);
+            border-radius: 4px;
+            height: 5px;
+            overflow: hidden;
+        }
+
+        .cpu-gauge-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: var(--accent);
+            width: 0%;
+            transition: width .6s ease, background .4s;
         }
 
         .metric-card {
@@ -986,6 +1005,10 @@
                 grid-template-columns: repeat(2, 1fr);
             }
 
+                .metrics-grid .metric-card:last-child {
+                    grid-column: span 2;
+                }
+
             .power-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
@@ -1220,16 +1243,36 @@
                 <div class="mod-body">
                     <div class="metrics-grid">
                         <div class="metric-card">
+                            <div class="metric-label">CPU Usage</div>
+                            <div class="metric-value" id="cpu-val">—</div>
+                            <div class="cpu-gauge-wrap">
+                                <div class="cpu-gauge-track">
+                                    <div class="cpu-gauge-fill" id="cpu-gauge-fill"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="metric-card">
                             <div class="metric-label">RAM Usage</div>
                             <div class="metric-value" id="ram-val">—</div>
+                            <div class="cpu-gauge-wrap">
+                                <div class="cpu-gauge-track">
+                                    <div class="cpu-gauge-fill" id="ram-gauge-fill" style="background:var(--purple)"></div>
+                                </div>
+                            </div>
                         </div>
                         <div class="metric-card">
                             <div class="metric-label">Uptime</div>
                             <div class="metric-value" id="uptime-val" style="font-size:1.1rem;padding-top:6px">—</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Last Updated</div>
-                            <div class="metric-value" id="metrics-ts" style="font-size:.85rem;padding-top:8px;color:var(--text-dim)">—</div>
+                            <div class="metric-label">CPU Temp</div>
+                            <div class="metric-value" id="cpu-temp-val">—</div>
+                            <div class="cpu-gauge-wrap">
+                                <div class="cpu-gauge-track">
+                                    <div class="cpu-gauge-fill" id="temp-gauge-fill" style="background:var(--green)"></div>
+                                </div>
+                            </div>
+                            <div id="metrics-ts" style="margin-top:7px;font-family:var(--mono);font-size:.65rem;color:var(--text-dim)">—</div>
                         </div>
                     </div>
 
@@ -1375,7 +1418,7 @@
                 case 'stream_control_result':
                     handleStreamControlResult(msg); break;
                 case 'pong':
-          /* keepalive — bỏ qua */ break;
+              /* keepalive — bỏ qua */ break;
                 case 'error':
                     logErr('Server: ' + msg.message); break;
                 default:
@@ -1444,18 +1487,18 @@
                 const cpu = Math.min(p.cpu || 0, 100);
                 const ram = p.ram_mb || p.ram || 0;
                 tr.innerHTML = `
-          <td>${p.pid}</td>
-          <td>${esc(p.name)}</td>
-          <td>
-            <div class="cpu-bar-wrap">
-              <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
-              <span>${cpu.toFixed(1)}%</span>
-            </div>
-          </td>
-          <td>${ram.toFixed(1)} MB</td>
-          <td><span class="badge badge-ok">Running</span></td>
-          <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
-        `;
+              <td>${p.pid}</td>
+              <td>${esc(p.name)}</td>
+              <td>
+                <div class="cpu-bar-wrap">
+                  <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+                  <span>${cpu.toFixed(1)}%</span>
+                </div>
+              </td>
+              <td>${ram.toFixed(1)} MB</td>
+              <td><span class="badge badge-ok">Running</span></td>
+              <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+            `;
                 tbody.appendChild(tr);
             });
         }
@@ -1468,18 +1511,18 @@
                 const cpu = Math.min(p.cpu || 0, 100);
                 const ram = p.ram_mb || p.ram || 0;
                 tr.innerHTML = `
-          <td>${p.pid}</td>
-          <td>${esc(p.name)}</td>
-          <td>
-            <div class="cpu-bar-wrap">
-              <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
-              <span>${cpu.toFixed(1)}%</span>
-            </div>
-          </td>
-          <td>${ram.toFixed(1)} MB</td>
-          <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
-          <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
-        `;
+              <td>${p.pid}</td>
+              <td>${esc(p.name)}</td>
+              <td>
+                <div class="cpu-bar-wrap">
+                  <span class="cpu-bar" style="width:${cpu * 0.5}px"></span>
+                  <span>${cpu.toFixed(1)}%</span>
+                </div>
+              </td>
+              <td>${ram.toFixed(1)} MB</td>
+              <td>${p.gui ? '<span class="badge badge-gui">GUI</span>' : ''}</td>
+              <td><button class="btn-danger btn-xs" onclick="killPid(${p.pid})">Kill</button></td>
+            `;
                 tbody.appendChild(tr);
             });
         }
@@ -1673,14 +1716,14 @@
                         const div = document.createElement('div');
                         div.className = 'file-item';
                         div.innerHTML = `
-              <span class="file-icon">${isDir ? '📁' : '📄'}</span>
-              <span class="file-name">${esc(p)}</span>
-              ${!isDir ? `
-                <button class="btn-ghost btn-xs"  data-action="read"     data-filepath="${esc(p)}">Read</button>
-                <button class="btn-ok    btn-xs"  data-action="download" data-filepath="${esc(p)}">Download</button>
-                <button class="btn-danger btn-xs" data-action="delete"   data-filepath="${esc(p)}">🗑</button>
-              ` : ''}
-            `;
+                  <span class="file-icon">${isDir ? '📁' : '📄'}</span>
+                  <span class="file-name">${esc(p)}</span>
+                  ${!isDir ? `
+                    <button class="btn-ghost btn-xs"  data-action="read"     data-filepath="${esc(p)}">Read</button>
+                    <button class="btn-ok    btn-xs"  data-action="download" data-filepath="${esc(p)}">Download</button>
+                    <button class="btn-danger btn-xs" data-action="delete"   data-filepath="${esc(p)}">🗑</button>
+                  ` : ''}
+                `;
                         if (isDir) {
                             div.onclick = () => {
                                 document.getElementById('file-path-input').value = p;
@@ -1724,13 +1767,31 @@
                 if (msg.status === 'ok' || msg.status === 'success') {
                     const d = msg.data || {};
 
-                    // RAM
+                    // ── CPU Usage ──────────────────────────────────────────
+                    const cpu = d.cpu_usage_percent ?? null;
+                    const cpuEl = document.getElementById('cpu-val');
+                    const cpuFill = document.getElementById('cpu-gauge-fill');
+                    if (cpu !== null) {
+                        cpuEl.textContent = cpu.toFixed(1) + '%';
+                        cpuEl.className = 'metric-value' + (cpu > 85 ? ' danger' : cpu > 60 ? ' warn' : '');
+                        cpuFill.style.width = Math.min(cpu, 100) + '%';
+                        cpuFill.style.background = cpu > 85 ? 'var(--red)' : cpu > 60 ? 'var(--yellow)' : 'var(--accent)';
+                    } else {
+                        cpuEl.textContent = 'N/A';
+                        cpuEl.className = 'metric-value';
+                        cpuFill.style.width = '0%';
+                    }
+
+                    // ── RAM ────────────────────────────────────────────────
                     const ram = d.ram_usage_percent || 0;
                     const ramEl = document.getElementById('ram-val');
+                    const ramFill = document.getElementById('ram-gauge-fill');
                     ramEl.textContent = ram.toFixed(1) + '%';
                     ramEl.className = 'metric-value' + (ram > 85 ? ' danger' : ram > 65 ? ' warn' : '');
+                    ramFill.style.width = Math.min(ram, 100) + '%';
+                    ramFill.style.background = ram > 85 ? 'var(--red)' : ram > 65 ? 'var(--yellow)' : 'var(--purple)';
 
-                    // Uptime — ưu tiên chuỗi có sẵn từ backend, fallback tính từ seconds
+                    // ── Uptime ─────────────────────────────────────────────
                     if (d.uptime) {
                         document.getElementById('uptime-val').textContent = d.uptime;
                     } else {
@@ -1739,13 +1800,30 @@
                         document.getElementById('uptime-val').textContent = `${h}h ${m}m`;
                     }
 
-                    // CPU temp (nếu có)
-                    const tempEl = document.getElementById('metrics-ts');
-                    if (d.cpu_temperature !== undefined && d.cpu_temperature !== 'N/A') {
-                        tempEl.textContent = `CPU: ${d.cpu_temperature}°C · ${new Date().toLocaleTimeString()}`;
+                    // ── CPU Temperature ────────────────────────────────────
+                    const temp = d.cpu_temperature;
+                    const tempValEl = document.getElementById('cpu-temp-val');
+                    const tempFill = document.getElementById('temp-gauge-fill');
+                    const hasTemp = temp !== undefined && temp !== null && temp !== 'N/A';
+                    if (hasTemp) {
+                        const t = parseFloat(temp);
+                        tempValEl.textContent = t.toFixed(1) + '°C';
+                        // Ngưỡng màu: xanh <60°C, vàng 60-80°C, đỏ >80°C
+                        const hot = t > 80, warm = t > 60;
+                        tempValEl.className = 'metric-value' + (hot ? ' danger' : warm ? ' warn' : '');
+                        // Gauge: ánh xạ 0–100°C → 0–100% width
+                        tempFill.style.width = Math.min(Math.max(t, 0), 100) + '%';
+                        tempFill.style.background = hot ? 'var(--red)' : warm ? 'var(--yellow)' : 'var(--green)';
                     } else {
-                        tempEl.textContent = new Date().toLocaleTimeString();
+                        tempValEl.textContent = 'N/A';
+                        tempValEl.className = 'metric-value';
+                        tempFill.style.width = '0%';
+                        tempFill.style.background = 'var(--text-dim)';
                     }
+
+                    // ── Timestamp ──────────────────────────────────────────
+                    document.getElementById('metrics-ts').textContent =
+                        'Updated · ' + new Date().toLocaleTimeString();
                 } else { logErr('system_metrics: ' + (msg.message || msg.status)); }
             });
         }

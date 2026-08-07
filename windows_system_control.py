@@ -23,6 +23,7 @@ class SystemMetrics:
     uptime_str: str  # Thời gian máy tính đã sử dụng/hoạt động
     cpu_temperature: float | str
     ram_usage_percent: float
+    cpu_usage_percent: float  # % CPU toàn hệ thống (tổng các lõi, trung bình)
     uptime: timedelta
 
 
@@ -101,10 +102,15 @@ def get_system_metrics() -> SystemMetrics:
     uptime_formatted = _format_uptime(uptime_td)
     cpu_temp = _get_cpu_temperature()
 
+    # psutil.cpu_percent(interval=0.5) block 0.5s để đo CPU usage thực tế.
+    # interval=None (non-blocking) luôn trả 0.0 ở lần gọi đầu tiên nên không dùng.
+    cpu_usage = round(psutil.cpu_percent(interval=0.5), 1)
+
     return SystemMetrics(
         uptime_str=uptime_formatted,
         cpu_temperature=cpu_temp,
         ram_usage_percent=float(memory_status.dwMemoryLoad),
+        cpu_usage_percent=cpu_usage,
         uptime=uptime_td,
     )
 

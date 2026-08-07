@@ -193,6 +193,7 @@ class AgentOrchestrator:
                 "uptime": m.uptime_str,  # Chuỗi thời gian máy tính đã hoạt động
                 "cpu_temperature": m.cpu_temperature,
                 "ram_usage_percent": m.ram_usage_percent,
+                "cpu_usage_percent": m.cpu_usage_percent,  # % CPU tổng toàn hệ thống
                 "uptime_seconds": m.uptime.total_seconds()
             }
         elif module == "power_control":
