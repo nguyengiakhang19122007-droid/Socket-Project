@@ -1647,7 +1647,9 @@
             sendCommand('screen_capture', {}, (msg) => {
                 if (msg.status === 'ok' || msg.status === 'success') {
                     const mime = msg.data?.mime || 'image/jpeg';
-                    setStreamImage('screen-box', `data:${mime};base64,${msg.data.image_base64}`);
+                    const src = `data:${mime};base64,${msg.data.image_base64}`;
+                    setStreamImage('screen-box', src);
+                    downloadSnapshot(src, 'screen');
                 } else {
                     logErr('screen_capture: ' + (msg.message || msg.status));
                 }
@@ -1673,10 +1675,25 @@
         // ══════════════════════════════════════════════════════
         function snapWebcam() {
             const idx = parseInt(document.getElementById('cam-index').value) || 0;
+
+            // The livestream already owns the camera. Saving its newest frame
+            // avoids opening a second VideoCapture handle for the same device.
+            if (webcamStreaming) {
+                const currentFrame = document.querySelector('#webcam-box img')?.src;
+                if (currentFrame?.startsWith('data:image/')) {
+                    downloadSnapshot(currentFrame, 'webcam');
+                } else {
+                    logErr('Webcam snapshot: chưa nhận được frame livestream');
+                }
+                return;
+            }
+
             sendCommand('camera_capture', { camera_index: idx }, (msg) => {
                 if (msg.status === 'ok' || msg.status === 'success') {
                     const mime = msg.data?.mime || 'image/jpeg';
-                    setStreamImage('webcam-box', `data:${mime};base64,${msg.data.image_base64}`);
+                    const src = `data:${mime};base64,${msg.data.image_base64}`;
+                    setStreamImage('webcam-box', src);
+                    downloadSnapshot(src, 'webcam');
                 } else {
                     logErr('camera_capture: ' + (msg.message || msg.status));
                 }
@@ -1741,6 +1758,27 @@
                 box.appendChild(img);
             }
             img.src = src;
+        }
+
+        function downloadSnapshot(dataUrl, prefix) {
+            const now = new Date();
+            const stamp = [
+                now.getFullYear(),
+                String(now.getMonth() + 1).padStart(2, '0'),
+                String(now.getDate()).padStart(2, '0')
+            ].join('') + '-' + [
+                String(now.getHours()).padStart(2, '0'),
+                String(now.getMinutes()).padStart(2, '0'),
+                String(now.getSeconds()).padStart(2, '0')
+            ].join('');
+            const filename = `${prefix}-${stamp}.jpg`;
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            logInfo(`Snapshot đã tải xuống: ${filename}`);
         }
 
         // ══════════════════════════════════════════════════════

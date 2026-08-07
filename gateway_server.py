@@ -15,7 +15,7 @@ Cấu hình qua biến môi trường:
   GATEWAY_PORT         Cổng lắng nghe (mặc định: 8765)
   GATEWAY_TOKEN        Token bí mật dùng để xác thực Web App
   SCREEN_FPS           Số frame/giây cho livestream màn hình (mặc định: 60)
-  WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 60)
+  WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 30)
   SCREEN_JPEG_QUALITY  Chất lượng JPEG màn hình, 1-100 (mặc định: 65)
   SCREEN_MAX_WIDTH     Chiều rộng màn hình tối đa, 0 giữ nguyên (mặc định: 1280)
   WEBCAM_JPEG_QUALITY  Chất lượng JPEG webcam, 1-100 (mặc định: 70)
@@ -60,7 +60,7 @@ DEFAULT_PORT = int(os.getenv("GATEWAY_PORT", "8765"))
 DEFAULT_TOKEN = secrets.token_hex(32)
 
 SCREEN_FPS = float(os.getenv("SCREEN_FPS", "60"))
-WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "60"))
+WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "30"))
 SCREEN_JPEG_QUALITY = int(os.getenv("SCREEN_JPEG_QUALITY", "65"))
 SCREEN_MAX_WIDTH = int(os.getenv("SCREEN_MAX_WIDTH", "1280"))
 WEBCAM_JPEG_QUALITY = int(os.getenv("WEBCAM_JPEG_QUALITY", "70"))
@@ -176,15 +176,32 @@ class GatewayState:
                 name=f"webcam-{self.client_id(websocket)}",
             )
             self._webcam_tasks[websocket] = task
+            task.add_done_callback(
+                lambda finished: asyncio.create_task(
+                    self._finish_webcam_task(websocket, finished)
+                )
+            )
             try:
                 # Do not report "started" until capture and the first send work.
-                await asyncio.wait_for(asyncio.shield(ready), timeout=5.0)
+                # Backend fallback can spend up to ~2 seconds warming each
+                # Windows camera API, so leave enough room for all candidates.
+                await asyncio.wait_for(asyncio.shield(ready), timeout=10.0)
             except (asyncio.CancelledError, Exception):
                 if not ready.done():
                     ready.cancel()
                 await self._cancel_stream_task(self._webcam_tasks, websocket, "webcam")
                 raise
             self.orchestrator.camera_stream_indicator.start()
+
+    async def _finish_webcam_task(
+        self, websocket: ServerConnection, task: asyncio.Task[None]
+    ) -> None:
+        """Clean up state when a webcam stream ends without a Stop request."""
+        async with self._lock:
+            if self._webcam_tasks.get(websocket) is task:
+                self._webcam_tasks.pop(websocket, None)
+                if not self._webcam_tasks:
+                    self.orchestrator.stop_active_feature("webcam")
 
     async def stop_webcam_stream(self, websocket: ServerConnection) -> None:
         async with self._lock:
@@ -314,6 +331,7 @@ async def _webcam_stream_loop(
             WEBCAM_JPEG_QUALITY,
             WEBCAM_MAX_WIDTH,
         )
+        consecutive_errors = 0
         while True:
             t_start = time.monotonic()
             try:
@@ -325,6 +343,7 @@ async def _webcam_stream_loop(
                     "data": {"image_base64": frame_b64, "mime": "image/jpeg"},
                 }, separators=(",", ":"))
                 await websocket.send(payload)
+                consecutive_errors = 0
                 if ready is not None and not ready.done():
                     ready.set_result(None)
             except websockets.exceptions.ConnectionClosed:
@@ -333,6 +352,18 @@ async def _webcam_stream_loop(
                 break
             except Exception as exc:
                 logger.warning("Webcam capture error: %s", exc)
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    try:
+                        await websocket.send(_build_response(
+                            msg_type="stream_control_result",
+                            status="error",
+                            data={"module": "webcam", "status": "error"},
+                            message=f"Webcam stream stopped after repeated frame errors: {exc}",
+                        ))
+                    except websockets.exceptions.ConnectionClosed:
+                        pass
+                    break
 
             elapsed = time.monotonic() - t_start
             sleep_time = max(0.0, interval - elapsed)

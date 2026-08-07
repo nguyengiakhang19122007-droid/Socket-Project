@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import tkinter as tk
 from typing import Optional
 
@@ -116,32 +117,44 @@ def _camera_backends() -> list[int]:
     return list(dict.fromkeys(candidates))
 
 
-def _read_camera_frame(camera, attempts: int = 10):
-    """Read through startup frames until the device returns a usable image."""
-    for _ in range(max(1, attempts)):
+def _read_camera_frame(
+    camera, attempts: int = 10, retry_delay: float = 0.05
+):
+    """Wait through temporary frame drops until a usable image is available."""
+    total_attempts = max(1, attempts)
+    for attempt in range(total_attempts):
         success, frame = camera.read()
-        if success and frame is not None:
+        if success and frame is not None and getattr(frame, "size", 0) > 0:
             return frame
+        if attempt + 1 < total_attempts:
+            time.sleep(max(0.0, retry_delay))
     return None
 
 
 def _open_working_camera(camera_index: int, fps: float = 30):
     """Return the first backend that both opens and produces a real frame."""
+    failures: list[str] = []
     for backend in _camera_backends():
         camera = cv2.VideoCapture(camera_index, backend)
         if not camera.isOpened():
+            failures.append(f"backend {backend}: could not open device")
             camera.release()
             continue
 
         camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         camera.set(cv2.CAP_PROP_FPS, max(float(fps), 1.0))
-        frame = _read_camera_frame(camera)
+        # A camera can report isOpened() before its sensor has produced the
+        # first frame. Forty attempts at 50 ms gives it about two seconds.
+        frame = _read_camera_frame(camera, attempts=40)
         if frame is not None:
             return camera, frame
+        failures.append(f"backend {backend}: opened but returned no frames")
         camera.release()
 
+    detail = "; ".join(failures)
     raise RuntimeError(
-        f"Unable to open camera {camera_index} with a backend that returns frames"
+        f"Camera {camera_index} is unavailable ({detail}). Check the camera "
+        "index, Windows camera permission, and whether another app is using it."
     )
 
 
@@ -180,7 +193,7 @@ class CameraStreamCapture:
     def __init__(
         self,
         camera_index: int = 0,
-        fps: float = 60,
+        fps: float = 30,
         jpeg_quality: int = 70,
         max_width: int = 1280,
     ) -> None:
@@ -193,7 +206,9 @@ class CameraStreamCapture:
             frame = self._pending_frame
             self._pending_frame = None
         else:
-            frame = _read_camera_frame(self._camera, attempts=1)
+            # USB cameras occasionally drop a frame. A short recovery window
+            # prevents a harmless delay from becoming a warning every frame.
+            frame = _read_camera_frame(self._camera, attempts=5)
             if frame is None:
                 raise RuntimeError("Camera did not return a frame")
         return _encode_jpeg(frame, self.jpeg_quality, self.max_width, "webcam frame")

@@ -10,6 +10,18 @@ import gateway_server
 
 
 class CameraOpenTests(unittest.TestCase):
+    def test_frame_reader_retries_temporary_camera_delay(self):
+        camera = mock.Mock()
+        expected_frame = np.zeros((2, 3, 3), dtype=np.uint8)
+        camera.read.side_effect = [(False, None), (False, None), (True, expected_frame)]
+
+        with mock.patch.object(capture_utils.time, "sleep") as sleep:
+            frame = capture_utils._read_camera_frame(camera, attempts=5)
+
+        self.assertIs(frame, expected_frame)
+        self.assertEqual(camera.read.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
     def test_windows_falls_back_when_first_backend_has_no_frames(self):
         first_camera = mock.Mock()
         first_camera.isOpened.return_value = True
@@ -74,6 +86,22 @@ class WebcamLoopTests(unittest.IsolatedAsyncioTestCase):
             await task
 
         websocket.send.assert_awaited()
+        stream.close.assert_called_once()
+
+    async def test_repeated_frame_errors_stop_stream_and_notify_dashboard(self):
+        websocket = mock.AsyncMock()
+        stream = mock.Mock()
+        stream.read_jpeg.side_effect = RuntimeError("no frame")
+
+        with (
+            mock.patch.object(gateway_server, "CameraStreamCapture", return_value=stream),
+            self.assertLogs("gateway", level="WARNING"),
+        ):
+            await gateway_server._webcam_stream_loop(websocket, 0, 1000)
+
+        self.assertEqual(stream.read_jpeg.call_count, 5)
+        sent_messages = [call.args[0] for call in websocket.send.await_args_list]
+        self.assertTrue(any('"status": "error"' in message for message in sent_messages))
         stream.close.assert_called_once()
 
 
