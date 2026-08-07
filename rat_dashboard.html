@@ -507,7 +507,8 @@
             min-height: 220px;
         }
 
-            .stream-box img {
+            .stream-box img,
+            .stream-box video {
                 width: 100%;
                 height: 100%;
                 object-fit: contain;
@@ -1376,6 +1377,17 @@
         let screenFrames = 0, webcamFrames = 0;
         let screenFpsTs = Date.now(), webcamFpsTs = Date.now();
 
+        const SCREEN_FMP4_PACKET_TYPE = 0x01;
+        const SCREEN_VIDEO_MIME = 'video/mp4; codecs="avc1.42C02A"';
+        const MAX_SCREEN_QUEUE_BYTES = 16 * 1024 * 1024;
+        let screenMediaSource = null;
+        let screenSourceBuffer = null;
+        let screenVideo = null;
+        let screenObjectUrl = null;
+        let screenSegmentQueue = [];
+        let screenQueuedBytes = 0;
+        let screenFpsTimer = null;
+
         let _rid = 0;
         function newRid() { return 'r' + (++_rid).toString(36) + Date.now().toString(36); }
 
@@ -1405,6 +1417,7 @@
             setStatus('connecting', 'Connecting…');
             try { ws = new WebSocket(url); }
             catch (e) { setStatus('error', 'Invalid URL'); logErr(e.message); return; }
+            ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
                 setStatus('connecting', 'Authenticating…');
@@ -1413,6 +1426,10 @@
             };
 
             ws.onmessage = ev => {
+                if (ev.data instanceof ArrayBuffer) {
+                    handleBinaryMessage(ev.data);
+                    return;
+                }
                 let msg;
                 try { msg = JSON.parse(ev.data); } catch { logErr('Bad JSON'); return; }
                 handleMessage(msg);
@@ -1426,6 +1443,7 @@
                 setStatus('', 'Disconnected');
                 setConnectBtn(false);
                 setControlsEnabled(false);
+                destroyScreenVideoPlayer();
                 updateStreamBtns();
                 logInfo(`Disconnected (code ${ev.code})`);
             };
@@ -1629,6 +1647,7 @@
                     screenStreaming = false;
                     document.getElementById('screen-live-status').classList.remove('live');
                     document.getElementById('screen-fps').style.display = 'none';
+                    destroyScreenVideoPlayer();
                 } else if (mod === 'webcam' && webcamStreaming) {
                     webcamStreaming = false;
                     document.getElementById('webcam-live-status').classList.remove('live');
@@ -1644,6 +1663,15 @@
         // MODULE 3: SCREEN
         // ══════════════════════════════════════════════════════
         function snapScreen() {
+            if (screenStreaming) {
+                if (screenVideo && screenVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+                    downloadVideoSnapshot(screenVideo, 'screen');
+                } else {
+                    logErr('Screen snapshot: video chưa có frame để chụp');
+                }
+                return;
+            }
+
             sendCommand('screen_capture', {}, (msg) => {
                 if (msg.status === 'ok' || msg.status === 'success') {
                     const mime = msg.data?.mime || 'image/jpeg';
@@ -1658,6 +1686,7 @@
 
         function toggleScreenStream() {
             if (!screenStreaming) {
+                if (!prepareScreenVideoPlayer()) return;
                 sendStreamControl('screen', 'start');
                 screenStreaming = true;
                 document.getElementById('screen-live-status').classList.add('live');
@@ -1666,8 +1695,177 @@
                 screenStreaming = false;
                 document.getElementById('screen-live-status').classList.remove('live');
                 document.getElementById('screen-fps').style.display = 'none';
+                destroyScreenVideoPlayer();
             }
             updateStreamBtns();
+        }
+
+        function prepareScreenVideoPlayer() {
+            if (!window.MediaSource) {
+                logErr('Trình duyệt không hỗ trợ MediaSource');
+                return false;
+            }
+            if (!MediaSource.isTypeSupported(SCREEN_VIDEO_MIME)) {
+                logErr(`Trình duyệt không hỗ trợ ${SCREEN_VIDEO_MIME}`);
+                return false;
+            }
+
+            destroyScreenVideoPlayer(false);
+            const box = document.getElementById('screen-box');
+            box.querySelector('.stream-placeholder')?.remove();
+            box.querySelector('img')?.remove();
+
+            const video = document.createElement('video');
+            video.autoplay = true;
+            video.muted = true;
+            video.playsInline = true;
+            video.setAttribute('aria-label', 'H.264 screen livestream');
+            box.appendChild(video);
+
+            const mediaSource = new MediaSource();
+            screenVideo = video;
+            screenMediaSource = mediaSource;
+            screenObjectUrl = URL.createObjectURL(mediaSource);
+            video.src = screenObjectUrl;
+
+            mediaSource.addEventListener('sourceopen', () => {
+                if (screenMediaSource !== mediaSource || mediaSource.readyState !== 'open') return;
+                try {
+                    const sourceBuffer = mediaSource.addSourceBuffer(SCREEN_VIDEO_MIME);
+                    screenSourceBuffer = sourceBuffer;
+                    sourceBuffer.addEventListener('updateend', () => {
+                        if (screenSourceBuffer !== sourceBuffer) return;
+                        keepScreenNearLiveEdge();
+                        pumpScreenSegments();
+                    });
+                    sourceBuffer.addEventListener('error', () => {
+                        failScreenVideo('MediaSource không giải mã được H.264 stream');
+                    });
+                    pumpScreenSegments();
+                    video.play().catch(() => {});
+                } catch (error) {
+                    failScreenVideo(`Không thể tạo H.264 SourceBuffer: ${error.message}`);
+                }
+            }, { once: true });
+
+            startScreenFpsMeter(video);
+            return true;
+        }
+
+        function handleBinaryMessage(buffer) {
+            const packet = new Uint8Array(buffer);
+            if (packet.length < 2) return;
+            if (packet[0] !== SCREEN_FMP4_PACKET_TYPE) {
+                logErr(`Unknown binary packet type: ${packet[0]}`);
+                return;
+            }
+            if (!screenStreaming || !screenMediaSource) return;
+
+            // Copy the payload because the WebSocket event owns the original buffer.
+            const payload = packet.slice(1);
+            screenSegmentQueue.push(payload);
+            screenQueuedBytes += payload.byteLength;
+            if (screenQueuedBytes > MAX_SCREEN_QUEUE_BYTES) {
+                failScreenVideo('Video buffer vượt 16 MiB; kết nối không theo kịp stream');
+                return;
+            }
+            pumpScreenSegments();
+        }
+
+        function pumpScreenSegments() {
+            if (!screenSourceBuffer || screenSourceBuffer.updating || !screenSegmentQueue.length) return;
+            const segment = screenSegmentQueue.shift();
+            screenQueuedBytes -= segment.byteLength;
+            try {
+                screenSourceBuffer.appendBuffer(segment);
+            } catch (error) {
+                failScreenVideo(`Không thể append fMP4 segment: ${error.message}`);
+            }
+        }
+
+        function keepScreenNearLiveEdge() {
+            if (!screenSourceBuffer || !screenVideo || !screenSourceBuffer.buffered.length) return;
+            const start = screenSourceBuffer.buffered.start(0);
+            const end = screenSourceBuffer.buffered.end(screenSourceBuffer.buffered.length - 1);
+            if (end - screenVideo.currentTime > 0.75) {
+                screenVideo.currentTime = Math.max(start, end - 0.1);
+            }
+            if (end - start > 3 && !screenSourceBuffer.updating) {
+                try {
+                    screenSourceBuffer.remove(start, Math.max(start, end - 1));
+                } catch {}
+            }
+        }
+
+        function startScreenFpsMeter(video) {
+            if (screenFpsTimer) clearInterval(screenFpsTimer);
+            let lastFrames = 0;
+            let lastTime = performance.now();
+            screenFpsTimer = setInterval(() => {
+                if (screenVideo !== video) return;
+                const quality = video.getVideoPlaybackQuality?.();
+                const totalFrames = quality?.totalVideoFrames ?? video.webkitDecodedFrameCount ?? 0;
+                const now = performance.now();
+                const fps = (totalFrames - lastFrames) * 1000 / Math.max(1, now - lastTime);
+                const badge = document.getElementById('screen-fps');
+                badge.textContent = `${Math.max(0, fps).toFixed(1)} fps`;
+                badge.style.display = 'block';
+                lastFrames = totalFrames;
+                lastTime = now;
+            }, 1000);
+        }
+
+        function failScreenVideo(message) {
+            logErr(`Screen stream: ${message}`);
+            if (screenStreaming) sendStreamControl('screen', 'stop');
+            screenStreaming = false;
+            document.getElementById('screen-live-status').classList.remove('live');
+            document.getElementById('screen-fps').style.display = 'none';
+            destroyScreenVideoPlayer();
+            updateStreamBtns();
+        }
+
+        function destroyScreenVideoPlayer(showPlaceholder = true) {
+            if (screenFpsTimer) {
+                clearInterval(screenFpsTimer);
+                screenFpsTimer = null;
+            }
+            screenSegmentQueue = [];
+            screenQueuedBytes = 0;
+            screenSourceBuffer = null;
+            screenMediaSource = null;
+            if (screenVideo) {
+                screenVideo.pause();
+                screenVideo.removeAttribute('src');
+                screenVideo.load();
+                screenVideo.remove();
+                screenVideo = null;
+            }
+            if (screenObjectUrl) {
+                URL.revokeObjectURL(screenObjectUrl);
+                screenObjectUrl = null;
+            }
+            if (showPlaceholder) {
+                const box = document.getElementById('screen-box');
+                if (!box.querySelector('img') && !box.querySelector('.stream-placeholder')) {
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'stream-placeholder';
+                    placeholder.innerHTML = '<div class="big">🖥</div><div>No signal — connect and start stream</div>';
+                    box.appendChild(placeholder);
+                }
+            }
+        }
+
+        function downloadVideoSnapshot(video, prefix) {
+            if (!video.videoWidth || !video.videoHeight) {
+                logErr(`${prefix} snapshot: frame chưa sẵn sàng`);
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            downloadSnapshot(canvas.toDataURL('image/jpeg', 0.9), prefix);
         }
 
         // ══════════════════════════════════════════════════════
@@ -1751,6 +1949,9 @@
 
         function setStreamImage(boxId, src) {
             const box = document.getElementById(boxId);
+            if (boxId === 'screen-box' && screenVideo) {
+                destroyScreenVideoPlayer(false);
+            }
             let img = box.querySelector('img');
             if (!img) {
                 box.querySelector('.stream-placeholder')?.remove();

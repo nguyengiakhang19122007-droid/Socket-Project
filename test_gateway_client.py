@@ -106,25 +106,26 @@ async def run_tests() -> None:
             "module": "screen",
             "action": "start",
         }))
-        ctrl_resp = json.loads(await ws.recv())
-        print(f"  Stream start: {ctrl_resp['status']}")
-
-        frame_count = 0
+        ctrl_resp = None
+        segment_count = 0
         deadline = asyncio.get_event_loop().time() + 5  # chờ tối đa 5 giây
-        while frame_count < 3:
+        while segment_count < 3 or ctrl_resp is None:
             if asyncio.get_event_loop().time() > deadline:
-                print("  Timeout waiting for frames")
+                print("  Timeout waiting for H.264 segments")
                 break
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=3.0)
-                frame_resp = json.loads(raw)
-                if frame_resp.get("type") == "stream_frame" and frame_resp.get("module") == "screen":
-                    frame_count += 1
-                    img_b64 = frame_resp["data"].get("image_base64", "")
-                    size_kb = len(img_b64) * 3 // 4 // 1024
-                    print(f"  ✓ Frame {frame_count}: ~{size_kb} KB")
+                if isinstance(raw, bytes):
+                    assert raw[0] == 0x01, f"Unknown binary packet type: {raw[0]}"
+                    segment_count += 1
+                    print(f"  ✓ fMP4 chunk {segment_count}: {len(raw) - 1} bytes")
+                else:
+                    message = json.loads(raw)
+                    if message.get("type") == "stream_control_result":
+                        ctrl_resp = message
+                        print(f"  Stream start: {ctrl_resp['status']}")
             except asyncio.TimeoutError:
-                print("  Timeout on frame")
+                print("  Timeout on fMP4 chunk")
                 break
 
         # Stop stream
@@ -133,7 +134,15 @@ async def run_tests() -> None:
             "module": "screen",
             "action": "stop",
         }))
-        stop_resp = json.loads(await ws.recv())
+        while True:
+            raw = await ws.recv()
+            if isinstance(raw, str):
+                stop_resp = json.loads(raw)
+                if (
+                    stop_resp.get("type") == "stream_control_result"
+                    and stop_resp.get("data", {}).get("status") == "stopped"
+                ):
+                    break
         print(f"  Stream stop: {stop_resp['status']}")
 
         # ── Test 7: Invalid token ────────────────────────────────────────────

@@ -15,8 +15,10 @@ Cấu hình qua biến môi trường:
   GATEWAY_PORT         Cổng lắng nghe (mặc định: 8765)
   GATEWAY_TOKEN        Token bí mật dùng để xác thực Web App
   SCREEN_FPS           Số frame/giây cho livestream màn hình (mặc định: 60)
+  FFMPEG_PATH          Đường dẫn FFmpeg executable (mặc định: ffmpeg trong PATH)
+  SCREEN_VIDEO_BITRATE Bitrate H.264 (mặc định: 4M)
+  SCREEN_FRAGMENT_MS   Độ dài fragment fMP4 tính bằng ms (mặc định: 100)
   WEBCAM_FPS           Số frame/giây cho livestream webcam (mặc định: 30)
-  SCREEN_JPEG_QUALITY  Chất lượng JPEG màn hình, 1-100 (mặc định: 65)
   SCREEN_MAX_WIDTH     Chiều rộng màn hình tối đa, 0 giữ nguyên (mặc định: 1280)
   WEBCAM_JPEG_QUALITY  Chất lượng JPEG webcam, 1-100 (mặc định: 70)
   WEBCAM_MAX_WIDTH     Chiều rộng webcam tối đa, 0 giữ nguyên (mặc định: 1280)
@@ -45,9 +47,14 @@ from agent_main import AgentOrchestrator
 from agent_security import verify_gateway_token
 from desktop_capture_utils import (
     CameraStreamCapture,
-    ScreenStreamCapture,
+    ScreenRawCapture,
 )
 from local_permission_control import LocalPermissionControl
+from video_stream_utils import (
+    FfmpegFmp4Encoder,
+    SCREEN_FMP4_MIME,
+    pack_screen_fmp4,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cấu hình mặc định
@@ -61,8 +68,10 @@ DEFAULT_TOKEN = secrets.token_hex(32)
 
 SCREEN_FPS = float(os.getenv("SCREEN_FPS", "60"))
 WEBCAM_FPS = float(os.getenv("WEBCAM_FPS", "30"))
-SCREEN_JPEG_QUALITY = int(os.getenv("SCREEN_JPEG_QUALITY", "65"))
 SCREEN_MAX_WIDTH = int(os.getenv("SCREEN_MAX_WIDTH", "1280"))
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+SCREEN_VIDEO_BITRATE = os.getenv("SCREEN_VIDEO_BITRATE", "4M")
+SCREEN_FRAGMENT_MS = int(os.getenv("SCREEN_FRAGMENT_MS", "100"))
 WEBCAM_JPEG_QUALITY = int(os.getenv("WEBCAM_JPEG_QUALITY", "70"))
 WEBCAM_MAX_WIDTH = int(os.getenv("WEBCAM_MAX_WIDTH", "1280"))
 
@@ -154,12 +163,35 @@ class GatewayState:
     async def start_screen_stream(self, websocket: ServerConnection) -> None:
         async with self._lock:
             await self._cancel_stream_task(self._screen_tasks, websocket, "screen")
+            ready = asyncio.get_running_loop().create_future()
             task = asyncio.create_task(
-                _screen_stream_loop(websocket, SCREEN_FPS),
+                _screen_stream_loop(websocket, SCREEN_FPS, ready),
                 name=f"screen-{self.client_id(websocket)}",
             )
             self._screen_tasks[websocket] = task
+            task.add_done_callback(
+                lambda finished: asyncio.create_task(
+                    self._finish_screen_task(websocket, finished)
+                )
+            )
+            try:
+                await asyncio.wait_for(asyncio.shield(ready), timeout=12.0)
+            except (asyncio.CancelledError, Exception):
+                if not ready.done():
+                    ready.cancel()
+                await self._cancel_stream_task(self._screen_tasks, websocket, "screen")
+                raise
             self.orchestrator.screen_stream_indicator.start()
+
+    async def _finish_screen_task(
+        self, websocket: ServerConnection, task: asyncio.Task[None]
+    ) -> None:
+        """Clean up state when an H.264 screen stream ends unexpectedly."""
+        async with self._lock:
+            if self._screen_tasks.get(websocket) is task:
+                self._screen_tasks.pop(websocket, None)
+                if not self._screen_tasks:
+                    self.orchestrator.stop_active_feature("screen")
 
     async def stop_screen_stream(self, websocket: ServerConnection) -> None:
         async with self._lock:
@@ -268,46 +300,103 @@ class GatewayState:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-async def _screen_stream_loop(websocket: ServerConnection, fps: float) -> None:
-    """Capture JPEG frames using one persistent MSS session."""
+async def _screen_stream_loop(
+    websocket: ServerConnection,
+    fps: float,
+    ready: asyncio.Future[None] | None = None,
+) -> None:
+    """Capture BGR frames, encode H.264/fMP4, and send binary packets."""
     interval = 1.0 / max(fps, 0.5)
-    logger.info("Screen stream started (%.1f fps)", fps)
+    logger.info(
+        "Screen H.264 stream starting (%.1f fps, bitrate=%s)",
+        fps,
+        SCREEN_VIDEO_BITRATE,
+    )
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="screen-capture")
-    capture: ScreenStreamCapture | None = None
+    capture: ScreenRawCapture | None = None
+    encoder: FfmpegFmp4Encoder | None = None
+    workers: list[asyncio.Task[None]] = []
     try:
         capture = await loop.run_in_executor(
-            executor, ScreenStreamCapture, SCREEN_JPEG_QUALITY, SCREEN_MAX_WIDTH
+            executor, ScreenRawCapture, SCREEN_MAX_WIDTH
         )
-        while True:
-            t_start = time.monotonic()
-            try:
-                jpeg_bytes = await loop.run_in_executor(executor, capture.read_jpeg)
-                frame_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
-                payload = json.dumps({
-                    "type": "stream_frame",
-                    "module": "screen",
-                    "data": {"image_base64": frame_b64, "mime": "image/jpeg"},
-                }, separators=(",", ":"))
-                await websocket.send(payload)
-            except websockets.exceptions.ConnectionClosed:
-                break
-            except Exception as exc:
-                logger.warning("Screen capture error: %s", exc)
+        encoder = FfmpegFmp4Encoder(
+            ffmpeg_path=FFMPEG_PATH,
+            width=capture.width,
+            height=capture.height,
+            fps=fps,
+            bitrate=SCREEN_VIDEO_BITRATE,
+            fragment_ms=SCREEN_FRAGMENT_MS,
+        )
+        await encoder.start()
 
-            elapsed = time.monotonic() - t_start
-            sleep_time = max(0.0, interval - elapsed)
-            await asyncio.sleep(sleep_time)
+        async def feed_frames() -> None:
+            assert capture is not None and encoder is not None
+            while True:
+                started = time.monotonic()
+                frame = await loop.run_in_executor(executor, capture.read_bgr24)
+                await encoder.write_frame(frame)
+                await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+
+        async def send_fragments() -> None:
+            assert encoder is not None
+            while True:
+                chunk = await encoder.read_chunk()
+                await websocket.send(pack_screen_fmp4(chunk))
+                if ready is not None and not ready.done():
+                    ready.set_result(None)
+
+        workers = [
+            asyncio.create_task(feed_frames(), name="screen-raw-frames"),
+            asyncio.create_task(send_fragments(), name="screen-fmp4-output"),
+        ]
+        done, _ = await asyncio.wait(workers, return_when=asyncio.FIRST_COMPLETED)
+        for worker in done:
+            error = worker.exception()
+            if error is not None:
+                raise error
+        raise RuntimeError("Screen encoder pipeline stopped unexpectedly")
+    except websockets.exceptions.ConnectionClosed:
+        if ready is not None and not ready.done():
+            ready.set_exception(
+                RuntimeError("Screen connection closed before the first video segment")
+            )
     except asyncio.CancelledError:
-        pass
+        if ready is not None and not ready.done():
+            ready.cancel()
+    except Exception as exc:
+        logger.warning("Screen H.264 stream error: %s", exc)
+        if ready is not None and not ready.done():
+            ready.set_exception(exc)
+        else:
+            try:
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result",
+                    status="error",
+                    data={"module": "screen", "status": "error"},
+                    message=f"Screen stream stopped: {exc}",
+                ))
+            except websockets.exceptions.ConnectionClosed:
+                pass
     finally:
+        for worker in workers:
+            if not worker.done():
+                worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        if encoder is not None:
+            try:
+                await encoder.close()
+            except Exception:
+                logger.debug("Failed to close FFmpeg encoder", exc_info=True)
         if capture is not None:
             try:
                 await loop.run_in_executor(executor, capture.close)
             except Exception:
-                logger.debug("Failed to close screen capture", exc_info=True)
+                logger.debug("Failed to close raw screen capture", exc_info=True)
         executor.shutdown(wait=False, cancel_futures=True)
-        logger.info("Screen stream stopped")
+        logger.info("Screen H.264 stream stopped")
 
 
 async def _webcam_stream_loop(
@@ -593,8 +682,28 @@ async def _handle_stream_control(
                     message="Screen permission was revoked while consent was pending",
                 ))
                 return
-            await state.start_screen_stream(websocket)
-            await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "screen", "status": "started"}))
+            try:
+                await state.start_screen_stream(websocket)
+            except Exception as exc:
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="error",
+                    data={"module": "screen", "status": "error"},
+                    message=str(exc) or "Timed out waiting for H.264 screen video",
+                ))
+                return
+            await websocket.send(_build_response(
+                msg_type="stream_control_result",
+                request_id=request_id,
+                data={
+                    "module": "screen",
+                    "status": "started",
+                    "transport": "websocket-binary",
+                    "container": "fmp4",
+                    "codec": "h264",
+                    "mime": SCREEN_FMP4_MIME,
+                },
+            ))
         elif action == "stop":
             await state.stop_screen_stream(websocket)
             await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "screen", "status": "stopped"}))
@@ -743,7 +852,12 @@ async def run_gateway(host: str, port: int, token: str, show_local_control: bool
     logger.info("=" * 60)
     logger.info("  WebSocket Gateway Server starting")
     logger.info("  Listening on ws://%s:%d", host, port)
-    logger.info("  Screen stream: %.1f fps | Webcam stream: %.1f fps", SCREEN_FPS, WEBCAM_FPS)
+    logger.info(
+        "  Screen H.264: %.1f fps @ %s | Webcam JPEG: %.1f fps",
+        SCREEN_FPS,
+        SCREEN_VIDEO_BITRATE,
+        WEBCAM_FPS,
+    )
     logger.info("=" * 60)
 
     # Tạo partial handler để truyền state vào

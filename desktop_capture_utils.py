@@ -158,30 +158,41 @@ def _open_working_camera(camera_index: int, fps: float = 30):
     )
 
 
-class ScreenStreamCapture:
-    """Long-lived, JPEG-encoded screen capture for high-frame-rate streams.
+class ScreenRawCapture:
+    """Long-lived MSS capture producing fixed-size packed BGR24 frames."""
 
-    An instance must be created, read, and closed on the same worker thread
-    because MSS stores platform capture handles in thread-local storage.
-    """
-
-    def __init__(self, jpeg_quality: int = 65, max_width: int = 1280) -> None:
-        self.jpeg_quality = max(1, min(int(jpeg_quality), 100))
+    def __init__(self, max_width: int = 1280) -> None:
         self.max_width = max(0, int(max_width))
         self._capture = mss.mss()
         self._monitor = self._capture.monitors[1]
+        first = self._grab_source_frame()
+        first = _resize_to_max_width(first, self.max_width)
+        height, width = first.shape[:2]
+        # yuv420p/H.264 requires even chroma dimensions.
+        self.width = max(2, width - (width % 2))
+        self.height = max(2, height - (height % 2))
+        self._pending_frame = self._prepare_frame(first)
 
-    def read_jpeg(self) -> bytes:
+    def _grab_source_frame(self) -> np.ndarray:
         image = self._capture.grab(self._monitor)
-        # MSS returns BGRA; OpenCV's JPEG encoder expects BGR.
-        frame = np.asarray(image, dtype=np.uint8)[:, :, :3]
-        frame = _resize_to_max_width(frame, self.max_width)
-        success, encoded = cv2.imencode(
-            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-        )
-        if not success:
-            raise RuntimeError("Failed to encode screen frame")
-        return encoded.tobytes()
+        return np.asarray(image, dtype=np.uint8)[:, :, :3]
+
+    def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
+        if frame.shape[1] != self.width or frame.shape[0] != self.height:
+            frame = cv2.resize(
+                frame, (self.width, self.height), interpolation=cv2.INTER_AREA
+            )
+        return np.ascontiguousarray(frame, dtype=np.uint8)
+
+    def read_bgr24(self) -> bytes:
+        if self._pending_frame is not None:
+            frame = self._pending_frame
+            self._pending_frame = None
+        else:
+            frame = self._grab_source_frame()
+            frame = _resize_to_max_width(frame, self.max_width)
+            frame = self._prepare_frame(frame)
+        return frame.tobytes()
 
     def close(self) -> None:
         self._capture.close()
