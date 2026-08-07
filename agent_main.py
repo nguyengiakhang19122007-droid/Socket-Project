@@ -60,8 +60,15 @@ class AgentOrchestrator:
         )
         self.keylogger = RemoteKeylogger()
 
-        self.screen_stream_indicator = VisualIndicator(color="green", label_text="SCREEN LIVESTREAM ACTIVE")
-        self.camera_stream_indicator = VisualIndicator(color="red", label_text="WEBCAM STREAM ACTIVE")
+        self.screen_stream_indicator = VisualIndicator(
+            color="green", label_text="SCREEN LIVESTREAM ACTIVE", vertical_offset=20
+        )
+        self.camera_stream_indicator = VisualIndicator(
+            color="red", label_text="WEBCAM STREAM ACTIVE", vertical_offset=70
+        )
+        self.keylogger_indicator = VisualIndicator(
+            color="#d97706", label_text="KEYBOARD CAPTURE ACTIVE", vertical_offset=120
+        )
 
     async def dispatch_command(self, raw_message: str | dict[str, Any]) -> dict[str, Any]:
         try:
@@ -102,6 +109,7 @@ class AgentOrchestrator:
         """Nhả tài nguyên dài hạn ngay khi policy của feature bị thu hồi."""
         if feature == "keylogger":
             self.keylogger.stop()
+            self.keylogger_indicator.stop()
         elif feature == "screen":
             self.screen_stream_indicator.stop()
         elif feature == "webcam":
@@ -153,9 +161,11 @@ class AgentOrchestrator:
             if action == "start":
                 if not self.keylogger.is_running:
                     self.keylogger.start()
+                self.keylogger_indicator.start()
                 return {"keylogger_status": "running"}
             elif action == "stop":
                 self.keylogger.stop()
+                self.keylogger_indicator.stop()
                 return {"keylogger_status": "stopped"}
             elif action == "get":
                 return {"keystrokes": self.keylogger.get_and_clear()}

@@ -15,36 +15,57 @@ from pynput import keyboard
 
 
 class VisualIndicator:
-    """Tạo chỉ báo trực quan hiển thị trên màn hình máy bị điều khiển (Xanh lá: Livestream, Đỏ: Webcam)."""
+    """Top-most local indicator for an active sensitive feature."""
 
-    def __init__(self, color: str = "green", label_text: str = "STREAM ACTIVE") -> None:
+    def __init__(
+        self,
+        color: str = "green",
+        label_text: str = "STREAM ACTIVE",
+        vertical_offset: int = 20,
+    ) -> None:
         self.color = color
         self.label_text = label_text
+        self.vertical_offset = max(0, int(vertical_offset))
         self._thread: Optional[threading.Thread] = None
         self._root: Optional[tk.Tk] = None
         self._running = False
+        self._generation = 0
+        self._state_lock = threading.Lock()
 
     def start(self) -> None:
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._run_ui, daemon=True)
-        self._thread.start()
+        with self._state_lock:
+            if self._running:
+                return
+            self._running = True
+            self._generation += 1
+            generation = self._generation
+            self._thread = threading.Thread(
+                target=self._run_ui, args=(generation,), daemon=True
+            )
+            thread = self._thread
+        thread.start()
 
-    def _run_ui(self) -> None:
+    def _run_ui(self, generation: int) -> None:
+        root: tk.Tk | None = None
         try:
-            self._root = tk.Tk()
-            self._root.overrideredirect(True)
-            self._root.attributes("-topmost", True)
-            self._root.attributes("-alpha", 0.85)
-            
-            # Đặt ở góc trên bên phải màn hình
-            screen_w = self._root.winfo_screenwidth()
-            self._root.geometry(f"220x40+{screen_w - 240}+20")
-            self._root.configure(bg=self.color)
+            root = tk.Tk()
+            with self._state_lock:
+                if generation != self._generation or not self._running:
+                    root.destroy()
+                    return
+                self._root = root
+
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.attributes("-alpha", 0.85)
+
+            # Stack indicators vertically so simultaneous features stay visible.
+            screen_w = root.winfo_screenwidth()
+            root.geometry(f"220x40+{screen_w - 240}+{self.vertical_offset}")
+            root.configure(bg=self.color)
 
             label = tk.Label(
-                self._root,
+                root,
                 text=f"● {self.label_text}",
                 fg="white",
                 bg=self.color,
@@ -53,25 +74,40 @@ class VisualIndicator:
             label.pack(expand=True, fill="both")
 
             # Hiệu ứng nhấp nháy chớp tắt
-            def flash():
-                if not self._running or not self._root:
+            def flash() -> None:
+                with self._state_lock:
+                    active = generation == self._generation and self._running
+                if not active:
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
                     return
-                current_bg = self._root.cget("bg")
+                current_bg = root.cget("bg")
                 next_bg = "#111111" if current_bg == self.color else self.color
-                self._root.configure(bg=next_bg)
+                root.configure(bg=next_bg)
                 label.configure(bg=next_bg)
-                self._root.after(500, flash)
+                root.after(500, flash)
 
-            self._root.after(500, flash)
-            self._root.mainloop()
+            root.after(500, flash)
+            root.mainloop()
         except Exception:
             pass
+        finally:
+            with self._state_lock:
+                if generation == self._generation:
+                    self._root = None
+                    self._running = False
 
     def stop(self) -> None:
-        self._running = False
-        if self._root:
+        with self._state_lock:
+            self._running = False
+            self._generation += 1
+            root = self._root
+            self._root = None
+        if root:
             try:
-                self._root.after(0, self._root.destroy)
+                root.after(0, root.destroy)
             except Exception:
                 pass
 
@@ -248,6 +284,13 @@ class RemoteKeylogger:
         self._is_running = False
 
     def _on_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
+        # Windows/pynput may emit the current Num Lock state when the listener
+        # starts. Depending on the pynput backend it is represented by a named
+        # Key or by the Windows VK_NUMLOCK virtual-key code (0x90).
+        key_name = str(getattr(key, "name", "")).lower().replace(" ", "_")
+        virtual_key = getattr(key, "vk", None)
+        if key_name in {"num_lock", "numlock"} or virtual_key == 0x90:
+            return
         with self._lock:
             try:
                 if isinstance(key, keyboard.KeyCode) and key.char:

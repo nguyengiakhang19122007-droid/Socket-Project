@@ -144,6 +144,10 @@ class GatewayState:
             if not self._webcam_tasks:
                 self.orchestrator.stop_active_feature("webcam")
             client_id = self._authenticated_clients.pop(websocket, "unknown")
+            if not self._authenticated_clients:
+                # Do not leave keyboard capture running without an authenticated
+                # controller that can visibly stop it.
+                self.orchestrator.stop_active_feature("keylogger")
             logger.info("Client disconnected: id=%s", client_id)
 
     def client_id(self, websocket: ServerConnection) -> str:
