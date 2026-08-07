@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,6 +83,40 @@ class RemoteRequest:
 
 def _prepare_storage() -> None:
     APP_DIRECTORY.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+def _atomic_write_json(destination: Path, payload: Mapping[str, Any], *, indent: int | None = None) -> None:
+    """Atomically write JSON without sharing one predictable temporary path."""
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor: int | None = None
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f"{destination.stem}-",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temporary_file:
+            descriptor = None
+            json.dump(payload, temporary_file, indent=indent)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+    except PermissionError as exc:
+        raise SecurityError(
+            f"Cannot save Agent state in {destination.parent}. "
+            "Close duplicate Agent/Gateway processes and check that this folder is writable."
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _message_box(message: str, title: str) -> bool:
@@ -236,9 +271,10 @@ class SecurityController:
             return None
 
     def _write_consent_state(self, approved: bool) -> None:
-        temporary = CONSENT_FILE.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"managed_terminal_consent": approved, "updated_at": _utc_timestamp()}), encoding="utf-8")
-        temporary.replace(CONSENT_FILE)
+        _atomic_write_json(
+            CONSENT_FILE,
+            {"managed_terminal_consent": approved, "updated_at": _utc_timestamp()},
+        )
 
     def _read_permissions(self) -> dict[str, bool]:
         defaults = {feature: True for feature in FEATURE_MODULES}
@@ -254,14 +290,12 @@ class SecurityController:
         return defaults
 
     def _write_permissions(self) -> None:
-        temporary = PERMISSIONS_FILE.with_suffix(".tmp")
         payload = {
             "version": 1,
             "permissions": self._permissions,
             "updated_at": _utc_timestamp(),
         }
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temporary.replace(PERMISSIONS_FILE)
+        _atomic_write_json(PERMISSIONS_FILE, payload, indent=2)
 
     def _audit(self, request_id: str, module: str, decision: str) -> None:
         entry = {"timestamp": _utc_timestamp(), "request_id": request_id, "module": module, "decision": decision}

@@ -74,6 +74,25 @@ class DynamicPermissionTests(unittest.TestCase):
         self.assertFalse(snapshot["screen"]["enabled"])
         self.assertFalse(snapshot["webcam"]["enabled"])
 
+    def test_consent_write_does_not_reuse_stale_legacy_temp_path(self) -> None:
+        controller = SecurityController()
+        legacy_temp = agent_security.CONSENT_FILE.with_suffix(".tmp")
+        legacy_temp.mkdir()
+
+        controller._write_consent_state(True)
+
+        stored = json.loads(agent_security.CONSENT_FILE.read_text(encoding="utf-8"))
+        self.assertTrue(stored["managed_terminal_consent"])
+        self.assertTrue(legacy_temp.is_dir())
+
+    def test_atomic_writer_removes_temporary_file_after_replace(self) -> None:
+        controller = SecurityController()
+
+        controller._write_consent_state(False)
+
+        temporary_files = list(agent_security.CONSENT_FILE.parent.glob("authorization-*.tmp"))
+        self.assertEqual(temporary_files, [])
+
 
 class _FakeSecurity:
     def __init__(self) -> None:
