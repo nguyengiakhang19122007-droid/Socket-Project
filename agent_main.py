@@ -12,15 +12,13 @@ import os
 import sys
 from typing import Any
 
-import cv2 
-
 from agent_security import MODULE_FEATURE, SecurityController
 
 from client_agent import show_notification
 
 from desktop_capture_utils import (
-    capture_primary_screen_png, 
-    capture_camera_frame, 
+    capture_primary_screen_jpeg,
+    capture_camera_jpeg,
     RemoteKeylogger, 
     VisualIndicator
 )
@@ -130,14 +128,21 @@ class AgentOrchestrator:
 
         # 3. MODULE SCREENSHOT - LIVESTREAM
         elif module == "screen_capture":
-            png_bytes = capture_primary_screen_png()
-            return {"image_base64": base64.b64encode(png_bytes).decode("utf-8")}
+            jpeg_bytes = capture_primary_screen_jpeg()
+            return {
+                "image_base64": base64.b64encode(jpeg_bytes).decode("ascii"),
+                "mime": "image/jpeg",
+            }
         elif module == "screen_stream":
             action = params.get("action", "start")
             if action == "start":
                 self.screen_stream_indicator.start()
-                png_bytes = capture_primary_screen_png()
-                return {"status": "streaming", "image_base64": base64.b64encode(png_bytes).decode("utf-8")}
+                jpeg_bytes = capture_primary_screen_jpeg()
+                return {
+                    "status": "streaming",
+                    "image_base64": base64.b64encode(jpeg_bytes).decode("ascii"),
+                    "mime": "image/jpeg",
+                }
             else:
                 self.screen_stream_indicator.stop()
                 return {"status": "stopped"}
@@ -172,16 +177,21 @@ class AgentOrchestrator:
 
         # 6. MODULE WEBCAM
         elif module == "camera_capture":
-            frame = capture_camera_frame(params.get("camera_index", 0))
-            _, encoded_img = cv2.imencode(".jpg", frame)
-            return {"image_base64": base64.b64encode(encoded_img.tobytes()).decode("utf-8")}
+            jpeg_bytes = capture_camera_jpeg(params.get("camera_index", 0))
+            return {
+                "image_base64": base64.b64encode(jpeg_bytes).decode("ascii"),
+                "mime": "image/jpeg",
+            }
         elif module == "camera_stream":
             action = params.get("action", "start")
             if action == "start":
                 self.camera_stream_indicator.start()
-                frame = capture_camera_frame(params.get("camera_index", 0))
-                _, encoded_img = cv2.imencode(".jpg", frame)
-                return {"status": "streaming", "image_base64": base64.b64encode(encoded_img.tobytes()).decode("utf-8")}
+                jpeg_bytes = capture_camera_jpeg(params.get("camera_index", 0))
+                return {
+                    "status": "streaming",
+                    "image_base64": base64.b64encode(jpeg_bytes).decode("ascii"),
+                    "mime": "image/jpeg",
+                }
             else:
                 self.camera_stream_indicator.stop()
                 return {"status": "stopped"}

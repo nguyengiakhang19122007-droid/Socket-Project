@@ -170,11 +170,20 @@ class GatewayState:
     async def start_webcam_stream(self, websocket: ServerConnection, camera_index: int = 0) -> None:
         async with self._lock:
             await self._cancel_stream_task(self._webcam_tasks, websocket, "webcam")
+            ready = asyncio.get_running_loop().create_future()
             task = asyncio.create_task(
-                _webcam_stream_loop(websocket, camera_index, WEBCAM_FPS),
+                _webcam_stream_loop(websocket, camera_index, WEBCAM_FPS, ready),
                 name=f"webcam-{self.client_id(websocket)}",
             )
             self._webcam_tasks[websocket] = task
+            try:
+                # Do not report "started" until capture and the first send work.
+                await asyncio.wait_for(asyncio.shield(ready), timeout=5.0)
+            except (asyncio.CancelledError, Exception):
+                if not ready.done():
+                    ready.cancel()
+                await self._cancel_stream_task(self._webcam_tasks, websocket, "webcam")
+                raise
             self.orchestrator.camera_stream_indicator.start()
 
     async def stop_webcam_stream(self, websocket: ServerConnection) -> None:
@@ -285,7 +294,10 @@ async def _screen_stream_loop(websocket: ServerConnection, fps: float) -> None:
 
 
 async def _webcam_stream_loop(
-    websocket: ServerConnection, camera_index: int, fps: float
+    websocket: ServerConnection,
+    camera_index: int,
+    fps: float,
+    ready: asyncio.Future[None] | None = None,
 ) -> None:
     """Capture JPEG frames using one persistent webcam handle."""
     interval = 1.0 / max(fps, 0.5)
@@ -313,7 +325,11 @@ async def _webcam_stream_loop(
                     "data": {"image_base64": frame_b64, "mime": "image/jpeg"},
                 }, separators=(",", ":"))
                 await websocket.send(payload)
+                if ready is not None and not ready.done():
+                    ready.set_result(None)
             except websockets.exceptions.ConnectionClosed:
+                if ready is not None and not ready.done():
+                    ready.set_exception(RuntimeError("Webcam connection closed before first frame"))
                 break
             except Exception as exc:
                 logger.warning("Webcam capture error: %s", exc)
@@ -323,6 +339,10 @@ async def _webcam_stream_loop(
             await asyncio.sleep(sleep_time)
     except asyncio.CancelledError:
         pass
+    except Exception as exc:
+        if ready is not None and not ready.done():
+            ready.set_exception(exc)
+        logger.warning("Unable to start webcam stream: %s", exc)
     finally:
         if capture is not None:
             try:
@@ -572,7 +592,16 @@ async def _handle_stream_control(
                     message="Webcam permission was revoked while consent was pending",
                 ))
                 return
-            await state.start_webcam_stream(websocket, camera_index)
+            try:
+                await state.start_webcam_stream(websocket, camera_index)
+            except Exception as exc:
+                logger.warning("Webcam stream start failed: %s", exc)
+                await websocket.send(_build_response(
+                    msg_type="stream_control_result", request_id=request_id,
+                    status="error", data={"module": "webcam", "status": "error"},
+                    message=str(exc),
+                ))
+                return
             await websocket.send(_build_response(msg_type="stream_control_result", request_id=request_id, data={"module": "webcam", "status": "started", "camera_index": camera_index}))
         elif action == "stop":
             await state.stop_webcam_stream(websocket)

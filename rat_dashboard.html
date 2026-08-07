@@ -1431,8 +1431,33 @@
             };
         }
 
+        function messageForLog(msg) {
+            if (!msg?.data) return msg;
+
+            const safe = {
+                ...msg,
+                data: { ...msg.data }
+            };
+
+            for (const field of ['image_base64', 'content_base64']) {
+                const value = safe.data[field];
+
+                if (typeof value === 'string') {
+                    const estimatedBytes = Math.floor(value.length * 3 / 4);
+
+                    safe.data[field] =
+                        `<omitted: ${(estimatedBytes / 1024).toFixed(1)} KiB>`;
+                }
+            }
+
+            return safe;
+        }
+
         function handleMessage(msg) {
-            if (msg.type !== 'stream_frame' && msg.type !== 'pong') logRecv(msg);
+            if (msg.type !== 'stream_frame' && msg.type !== 'pong') {
+                logRecv(messageForLog(msg));
+            }
+
 
             switch (msg.type) {
                 case 'auth_result':
@@ -1597,9 +1622,9 @@
             const mod = msg.data?.module || '';
             const status = msg.data?.status || msg.status;
 
-            if (status === 'denied') {
-                logErr(`Stream ${mod}: Permission denied by remote user`);
-                // Roll back UI state nếu bị từ chối
+            if (status === 'denied' || status === 'error') {
+                logErr(`Stream ${mod}: ${msg.message || status}`);
+                // Roll back optimistic UI state when start did not really work.
                 if (mod === 'screen' && screenStreaming) {
                     screenStreaming = false;
                     document.getElementById('screen-live-status').classList.remove('live');
@@ -1621,7 +1646,10 @@
         function snapScreen() {
             sendCommand('screen_capture', {}, (msg) => {
                 if (msg.status === 'ok' || msg.status === 'success') {
-                    setStreamImage('screen-box', 'data:image/png;base64,' + msg.data.image_base64);
+                    const mime = msg.data?.mime || 'image/jpeg';
+                    setStreamImage('screen-box', `data:${mime};base64,${msg.data.image_base64}`);
+                } else {
+                    logErr('screen_capture: ' + (msg.message || msg.status));
                 }
             });
         }
@@ -1647,7 +1675,10 @@
             const idx = parseInt(document.getElementById('cam-index').value) || 0;
             sendCommand('camera_capture', { camera_index: idx }, (msg) => {
                 if (msg.status === 'ok' || msg.status === 'success') {
-                    setStreamImage('webcam-box', 'data:image/jpeg;base64,' + msg.data.image_base64);
+                    const mime = msg.data?.mime || 'image/jpeg';
+                    setStreamImage('webcam-box', `data:${mime};base64,${msg.data.image_base64}`);
+                } else {
+                    logErr('camera_capture: ' + (msg.message || msg.status));
                 }
             });
         }

