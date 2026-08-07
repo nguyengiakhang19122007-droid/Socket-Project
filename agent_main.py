@@ -218,15 +218,19 @@ class AgentOrchestrator:
             }
         elif module == "power_control":
             action = params.get("action")
+            power_mode = None
             if action == "lock":
                 lock_workstation()
             elif action == "sleep":
-                sleep_system(confirm=True)
+                power_mode = sleep_system(confirm=True)
             elif action == "restart":
                 restart_system(confirm=True)
             elif action == "shutdown":
                 shutdown_system(confirm=True)
-            return {"power_action": action, "executed": True}
+            result = {"power_action": action, "executed": True}
+            if power_mode is not None:
+                result["power_mode"] = power_mode
+            return result
 
         raise ValueError(f"Unknown module execution: {module}")
 

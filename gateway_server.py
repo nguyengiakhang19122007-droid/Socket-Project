@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import errno
 import json
 import logging
 import os
@@ -67,6 +68,14 @@ WEBCAM_JPEG_QUALITY = int(os.getenv("WEBCAM_JPEG_QUALITY", "70"))
 WEBCAM_MAX_WIDTH = int(os.getenv("WEBCAM_MAX_WIDTH", "1280"))
 
 logger = logging.getLogger("gateway")
+
+
+def _is_address_in_use_error(exc: OSError) -> bool:
+    """Recognize POSIX EADDRINUSE and Windows WSAEADDRINUSE (10048)."""
+    return (
+        exc.errno in {errno.EADDRINUSE, 10048}
+        or getattr(exc, "winerror", None) == 10048
+    )
 
 # Ứng dụng được phép khởi chạy từ xa.
 # Đặt biến môi trường GATEWAY_ALLOWED_APPS với JSON object, ví dụ:
@@ -817,6 +826,8 @@ async def run_gateway(host: str, port: int, token: str, show_local_control: bool
 
     logger.info("=" * 60)
     logger.info("  WebSocket Gateway Server starting")
+    logger.info("  Source file: %s", os.path.abspath(__file__))
+    logger.info("  Power control: capability-aware-sleep-v2")
     logger.info("  Listening on ws://%s:%d", host, port)
     logger.info("  Screen stream: %.1f fps | Webcam stream: %.1f fps", SCREEN_FPS, WEBCAM_FPS)
     logger.info("=" * 60)
@@ -884,6 +895,20 @@ def main() -> None:
         )
     except KeyboardInterrupt:
         logger.info("Gateway stopped by user.")
+    except OSError as exc:
+        if not _is_address_in_use_error(exc):
+            raise
+        logger.error(
+            "Cannot start Gateway: %s:%d is already used by another process. "
+            "The dashboard may still be connected to an older Gateway.",
+            args.host,
+            args.port,
+        )
+        logger.error("Find it with: netstat -ano | findstr :%d", args.port)
+        logger.error(
+            "Or start on another port: python gateway_server.py --port %d",
+            args.port + 1,
+        )
 
 
 if __name__ == "__main__":

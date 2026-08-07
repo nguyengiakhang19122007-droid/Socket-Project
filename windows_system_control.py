@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import re
 import subprocess
@@ -11,6 +12,9 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import psutil
+
+
+logger = logging.getLogger("windows_power")
 
 
 class WindowsSystemError(RuntimeError):
@@ -266,7 +270,7 @@ def _request_modern_standby() -> None:
     send_message(hwnd_broadcast, wm_syscommand, sc_monitorpower, monitor_power_off)
 
 
-def sleep_system(*, confirm: bool = False) -> None:
+def sleep_system(*, confirm: bool = False) -> str:
     """Enter the Sleep model supported by this Windows computer."""
     _require_windows()
     _require_confirmation(confirm)
@@ -274,8 +278,9 @@ def sleep_system(*, confirm: bool = False) -> None:
     if _supports_modern_standby():
         # S0 Low Power Idle doesn't support S3 or Hybrid Sleep. Turning off the
         # display starts the Modern Standby transition managed by Windows.
+        logger.info("Sleep requested using Modern Standby (S0 Low Power Idle)")
         _request_modern_standby()
-        return
+        return "modern_standby_s0"
 
     # Traditional S1-S3 system: prevent the active plan from combining S3 with
     # a hibernation file, then restore the user's values after resume.
@@ -289,6 +294,7 @@ def sleep_system(*, confirm: bool = False) -> None:
                 "Windows policy kept Hybrid Sleep enabled; pure Sleep was cancelled."
             )
         _request_windows_suspend()
+        return "traditional_sleep_s1_s3"
     finally:
         # SetSuspendState returns after resume; restore the exact AC/DC values
         # that were active before this request.
